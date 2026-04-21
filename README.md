@@ -20,6 +20,34 @@ This repository contains the Python package, runner scripts, tests, configuratio
 - The default model revision follows the upstream latest revision on `main`.
 - A pinned tested revision is also available for reproducible setup.
 
+### Model Weight Locations
+
+`hf_hub_download` mirrors the Hugging Face repo's directory structure into the repository root, so the real `.pt` files land in categorised subdirectories:
+
+```text
+artery_vein/   av_july24.pt  av_july24_AVRDB.pt  ...
+disc/          disc_july24.pt  disc_july24_ADAM.pt  ...
+discedge/      discedge_july24.pt
+fovea/         fovea_july24.pt
+odfd/          odfd_march25.pt
+quality/       quality.pt
+vessels/       vessels_july24.pt  vessels_july24_DRHAGIS.pt  ...
+```
+
+At runtime, `configure_runtime_environment()` creates a flat `model_releases/` directory and populates it with symlinks pointing at those real files:
+
+```text
+model_releases/
+├── av_july24.pt          -> ../artery_vein/av_july24.pt
+├── disc_july24.pt        -> ../disc/disc_july24.pt
+├── fovea_july24.pt       -> ../fovea/fovea_july24.pt
+├── quality.pt            -> ../quality/quality.pt
+├── vessels_july24.pt     -> ../vessels/vessels_july24.pt
+└── ...
+```
+
+`model_releases/` is therefore a symlink view only — **the actual weight files are in the categorised subdirectories above**. Deleting `model_releases/` is safe; deleting the categorised subdirectories removes the weights and requires re-running `./setup.sh` to restore them. Both `model_releases/` and the `.pt` files in the categorised subdirectories are excluded from version control via `.gitignore`.
+
 ## Quick Start
 
 Create or update the environment and download the model weights:
