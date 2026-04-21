@@ -6,6 +6,32 @@
 
 A GitHub-first fork of [`Eyened/vascx`](https://huggingface.co/Eyened/vascx) — a retinal fundus analysis pipeline. Model weights are not committed here; they are downloaded on demand via `./setup.sh`.
 
+## Repository Layout
+
+```text
+vascx_models/      # package source and CLI
+tests/             # pytest suite
+samples/           # bundled sample fundus images
+config.yaml        # overlay and pipeline configuration
+environment.yml    # conda environment definition
+setup.sh           # environment bootstrap and model downloader
+run.sh             # primary local runner
+```
+
+Model weights are downloaded into categorised subdirectories:
+
+```text
+artery_vein/   av_july24.pt  av_july24_AVRDB.pt  ...
+disc/          disc_july24.pt  disc_july24_ADAM.pt  ...
+discedge/      discedge_july24.pt
+fovea/         fovea_july24.pt
+odfd/          odfd_march25.pt
+quality/       quality.pt
+vessels/       vessels_july24.pt  vessels_july24_DRHAGIS.pt  ...
+```
+
+At runtime, `configure_runtime_environment()` creates a flat `model_releases/` directory of symlinks pointing at the files above. Deleting `model_releases/` is safe; deleting the categorised subdirectories requires re-running `./setup.sh` to restore the weights. Both are excluded from version control.
+
 ## Quick Start
 
 ```bash
