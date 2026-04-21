@@ -2,8 +2,6 @@ import os
 import shutil
 from pathlib import Path
 
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -123,7 +121,9 @@ def test_single_image_pipeline_smoke(tmp_path: Path, device_name: str) -> None:
     )
     preprocessed_image_path = preprocessed_rgb_dir / f"{image_id}.png"
 
-    df_quality = run_quality_estimation([preprocessed_image_path], ids=[image_id], device=device)
+    df_quality = run_quality_estimation(
+        [preprocessed_image_path], ids=[image_id], device=device
+    )
     df_quality.to_csv(quality_path)
 
     run_segmentation_vessels_and_av(
@@ -165,7 +165,9 @@ def test_single_image_pipeline_smoke(tmp_path: Path, device_name: str) -> None:
         samples_per_connection=app_config.vessel_widths.samples_per_connection,
     )
 
-    df_fovea = run_fovea_detection([preprocessed_image_path], ids=[image_id], device=device)
+    df_fovea = run_fovea_detection(
+        [preprocessed_image_path], ids=[image_id], device=device
+    )
     df_fovea.to_csv(fovea_path)
 
     batch_create_overlays(

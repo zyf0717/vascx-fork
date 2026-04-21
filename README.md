@@ -62,14 +62,16 @@ SKIP_ENV=1 ./setup.sh --tested      # skip conda env creation
 
 ## Running The Pipeline
 
+Use any one of the following commands:
+
 ```bash
-./run.sh --sample-run
-INPUT_PATH=/path/to/images OUTPUT_PATH=/path/to/output N_JOBS=4 ./run.sh
-python -m vascx_models run /path/to/images /path/to/output
-python -m vascx_models run /path/to/image_list.csv /path/to/output
-python -m vascx_models run /path/to/images /path/to/output --no-preprocess
-python -m vascx_models run /path/to/images /path/to/output --device cpu
-python -m vascx_models run /path/to/images /path/to/output --no-disc --no-quality --no-fovea --no-overlay
+./run.sh --sample-run                                                                    # run on bundled sample images
+INPUT_PATH=/path/to/images OUTPUT_PATH=/path/to/output N_JOBS=4 ./run.sh               # custom paths and parallelism
+python -m vascx_models run /path/to/images /path/to/output                             # image directory input
+python -m vascx_models run /path/to/image_list.csv /path/to/output                     # CSV with 'path' column
+python -m vascx_models run /path/to/images /path/to/output --no-preprocess             # skip preprocessing step
+python -m vascx_models run /path/to/images /path/to/output --device cpu                # force CPU inference
+python -m vascx_models run /path/to/images /path/to/output --no-disc --no-quality --no-fovea --no-overlay  # vessels only
 ```
 
 Device selection defaults to `auto` (prefers `cuda`, then `mps`, then `cpu`). Requesting an unavailable accelerator exits with an error rather than silently falling back.
@@ -134,7 +136,7 @@ OUTPUT_PATH/
 
 ```bash
 pytest                                                                    # unit + CLI tests
-KMP_DUPLICATE_LIB_OK=TRUE pytest tests/test_e2e.py -q -k cpu            # real-model smoke test
+pytest tests/test_e2e.py -q -k cpu                                      # real-model smoke test
 ```
 
 The e2e test skips automatically when model weights have not been downloaded.
