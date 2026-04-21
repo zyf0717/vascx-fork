@@ -48,6 +48,23 @@ model_releases/
 
 `model_releases/` is therefore a symlink view only — **the actual weight files are in the categorised subdirectories above**. Deleting `model_releases/` is safe; deleting the categorised subdirectories removes the weights and requires re-running `./setup.sh` to restore them. Both `model_releases/` and the `.pt` files in the categorised subdirectories are excluded from version control via `.gitignore`.
 
+### HuggingFace Download Cache
+
+`configure_runtime_environment()` redirects `XDG_CACHE_HOME` to a local `.cache/` directory inside the repository root, which keeps all HuggingFace activity out of `~/.cache/huggingface`. After `./setup.sh` runs, `.cache/huggingface/download/` mirrors the same categorised layout but contains only small `.metadata` files, one per downloaded asset:
+
+```text
+.cache/huggingface/download/
+├── artery_vein/
+│   ├── av_july24.pt.metadata       # revision hash, ETag, timestamp
+│   ├── av_july24_AVRDB.pt.metadata
+│   └── ...
+├── disc/
+├── vessels/
+└── ...
+```
+
+Each metadata file holds three lines: the resolved git revision hash, a SHA-256 ETag, and a download timestamp. `hf_hub_download` uses these to skip re-downloading a file whose remote ETag has not changed. **No weight data is stored in `.cache/`** — only these metadata records. Deleting `.cache/` forces `./setup.sh` to re-check every file against the remote on the next run, but does not remove any weights.
+
 ## Quick Start
 
 Create or update the environment and download the model weights:
