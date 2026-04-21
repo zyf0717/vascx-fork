@@ -1,0 +1,21 @@
+name: vascx-fork
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy=2.*
+  - pandas=2.*
+  - tqdm=4.*
+  - pillow=11.*
+  - scikit-image
+  - click=8.*
+  - pyyaml=6.*
+  - pytest
+  - pip:
+      - huggingface_hub
+      - torch==2.11.0
+      - torchvision==0.26.0
+      - torchaudio==2.11.0
+      - retinalysis-fundusprep
+      - retinalysis-inference

@@ -1,0 +1,604 @@
+import logging
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+from PIL import Image
+from skimage.morphology import skeletonize as skimage_skeletonize
+
+from .config import OverlayCircle
+
+logger = logging.getLogger(__name__)
+
+_NEIGHBORS_8: tuple[tuple[int, int], ...] = (
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+)
+
+
+def _skeletonize(binary_mask: np.ndarray) -> np.ndarray:
+    """Thin a binary mask to a one-pixel-wide skeleton."""
+    if binary_mask.ndim != 2:
+        raise ValueError("Expected a 2D binary mask")
+    return skimage_skeletonize(binary_mask.astype(bool))
+
+
+def _connected_components(mask: np.ndarray) -> List[np.ndarray]:
+    visited = np.zeros_like(mask, dtype=bool)
+    components: List[np.ndarray] = []
+
+    ys, xs = np.nonzero(mask)
+    for seed_y, seed_x in zip(ys, xs):
+        if visited[seed_y, seed_x]:
+            continue
+
+        stack = [(int(seed_y), int(seed_x))]
+        visited[seed_y, seed_x] = True
+        coords: List[Tuple[int, int]] = []
+
+        while stack:
+            y, x = stack.pop()
+            coords.append((y, x))
+            for dy, dx in _NEIGHBORS_8:
+                ny = y + dy
+                nx = x + dx
+                if ny < 0 or nx < 0 or ny >= mask.shape[0] or nx >= mask.shape[1]:
+                    continue
+                if not mask[ny, nx] or visited[ny, nx]:
+                    continue
+                visited[ny, nx] = True
+                stack.append((ny, nx))
+
+        components.append(np.asarray(coords, dtype=np.int32))
+
+    return components
+
+
+def _local_skeleton_points(
+    skeleton: np.ndarray,
+    point_xy: np.ndarray,
+    radius_px: float,
+) -> np.ndarray:
+    x, y = point_xy
+    height, width = skeleton.shape
+    x_min = max(0, int(np.floor(x - radius_px)))
+    x_max = min(width - 1, int(np.ceil(x + radius_px)))
+    y_min = max(0, int(np.floor(y - radius_px)))
+    y_max = min(height - 1, int(np.ceil(y + radius_px)))
+
+    window = skeleton[y_min : y_max + 1, x_min : x_max + 1]
+    ys, xs = np.nonzero(window)
+    if len(xs) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    xs = xs.astype(float) + float(x_min)
+    ys = ys.astype(float) + float(y_min)
+    deltas = np.column_stack((xs - x, ys - y))
+    keep = np.sum(deltas * deltas, axis=1) <= radius_px * radius_px
+    return np.column_stack((xs[keep], ys[keep]))
+
+
+def _estimate_tangent(points_xy: np.ndarray) -> Optional[np.ndarray]:
+    if len(points_xy) < 2:
+        return None
+
+    centered = points_xy - points_xy.mean(axis=0, keepdims=True)
+    covariance = centered.T @ centered
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    tangent = eigenvectors[:, int(np.argmax(eigenvalues))]
+    norm = float(np.linalg.norm(tangent))
+    if norm == 0.0:
+        return None
+    return tangent / norm
+
+
+def _sample_mask(mask: np.ndarray, point_xy: np.ndarray) -> float:
+    x, y = point_xy
+    height, width = mask.shape
+    if x < 0 or y < 0 or x > width - 1 or y > height - 1:
+        return 0.0
+
+    x0 = int(np.floor(x))
+    y0 = int(np.floor(y))
+    x1 = min(x0 + 1, width - 1)
+    y1 = min(y0 + 1, height - 1)
+
+    dx = x - x0
+    dy = y - y0
+
+    v00 = float(mask[y0, x0])
+    v10 = float(mask[y0, x1])
+    v01 = float(mask[y1, x0])
+    v11 = float(mask[y1, x1])
+
+    top = v00 * (1.0 - dx) + v10 * dx
+    bottom = v01 * (1.0 - dx) + v11 * dx
+    return top * (1.0 - dy) + bottom * dy
+
+
+def _trace_boundary_distance(
+    vessel_mask: np.ndarray,
+    point_xy: np.ndarray,
+    direction_xy: np.ndarray,
+    step_px: float,
+) -> float:
+    max_distance = float(np.hypot(*vessel_mask.shape)) + 2.0
+    current_value = _sample_mask(vessel_mask, point_xy)
+    if current_value < 0.5:
+        return float("nan")
+
+    t_inside = 0.0
+    steps = int(np.ceil(max_distance / step_px))
+    for step in range(1, steps + 1):
+        t_outside = step * step_px
+        sample_point = point_xy + direction_xy * t_outside
+        if _sample_mask(vessel_mask, sample_point) < 0.5:
+            low = t_inside
+            high = t_outside
+            for _ in range(12):
+                mid = (low + high) / 2.0
+                mid_point = point_xy + direction_xy * mid
+                if _sample_mask(vessel_mask, mid_point) >= 0.5:
+                    low = mid
+                else:
+                    high = mid
+            return low
+        t_inside = t_outside
+
+    return float("nan")
+
+
+def _boundary_point(
+    center_xy: np.ndarray,
+    direction_xy: np.ndarray,
+    distance_px: float,
+) -> np.ndarray:
+    return center_xy + direction_xy * distance_px
+
+
+def _measure_width_along_normal(
+    vessel_mask: np.ndarray,
+    center_xy: np.ndarray,
+    tangent_xy: np.ndarray,
+    step_px: float,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    normal_xy = np.array([-tangent_xy[1], tangent_xy[0]], dtype=float)
+    norm = float(np.linalg.norm(normal_xy))
+    if norm == 0.0:
+        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+        return float("nan"), nan_point, nan_point
+    normal_xy /= norm
+
+    positive = _trace_boundary_distance(vessel_mask, center_xy, normal_xy, step_px)
+    negative = _trace_boundary_distance(vessel_mask, center_xy, -normal_xy, step_px)
+    if np.isnan(positive) or np.isnan(negative):
+        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+        return float("nan"), nan_point, nan_point
+
+    start_xy = _boundary_point(center_xy, -normal_xy, negative)
+    end_xy = _boundary_point(center_xy, normal_xy, positive)
+    return positive + negative, start_xy, end_xy
+
+
+def measure_vessel_width_at_coordinate(
+    vessel_mask: np.ndarray,
+    point_xy: np.ndarray,
+    skeleton: Optional[np.ndarray] = None,
+    tangent_window_px: float = 10.0,
+    measurement_step_px: float = 0.25,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Measure vessel width at an arbitrary coordinate using the local skeleton tangent."""
+    skeleton = _skeletonize(vessel_mask) if skeleton is None else skeleton
+    local_points = _local_skeleton_points(skeleton, point_xy, tangent_window_px)
+    tangent_xy = _estimate_tangent(local_points)
+    if tangent_xy is None:
+        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+        return float("nan"), nan_point, nan_point
+
+    return _measure_width_along_normal(
+        vessel_mask=vessel_mask,
+        center_xy=point_xy,
+        tangent_xy=tangent_xy,
+        step_px=measurement_step_px,
+    )
+
+
+def _component_neighbor_map(component: np.ndarray) -> dict[tuple[int, int], list[tuple[int, int]]]:
+    points = {tuple(int(value) for value in coord) for coord in component.tolist()}
+    neighbors: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for y, x in points:
+        adjacent: list[tuple[int, int]] = []
+        for dy, dx in _NEIGHBORS_8:
+            candidate = (y + dy, x + dx)
+            if candidate in points:
+                adjacent.append(candidate)
+        neighbors[(y, x)] = adjacent
+    return neighbors
+
+
+def _has_branch_on_full_skeleton(
+    ordered_path_yx: np.ndarray,
+    full_skeleton_neighbors: dict[tuple[int, int], list[tuple[int, int]]],
+) -> bool:
+    for y_value, x_value in ordered_path_yx:
+        point = (int(y_value), int(x_value))
+        if len(full_skeleton_neighbors.get(point, ())) > 2:
+            return True
+    return False
+
+
+def _ordered_path_component(component: np.ndarray) -> Optional[np.ndarray]:
+    if len(component) < 2:
+        return None
+
+    neighbors = _component_neighbor_map(component)
+    if any(len(adjacent) > 2 for adjacent in neighbors.values()):
+        # TODO: Handle bifurcations by splitting the annulus skeleton into branch-wise paths.
+        return None
+
+    endpoints = [point for point, adjacent in neighbors.items() if len(adjacent) == 1]
+    if len(endpoints) != 2:
+        # TODO: Handle loops and fragmented shapes that do not reduce to a single open path.
+        return None
+
+    ordered: list[tuple[int, int]] = [endpoints[0]]
+    previous: Optional[tuple[int, int]] = None
+    current = endpoints[0]
+
+    while True:
+        candidates = [point for point in neighbors[current] if point != previous]
+        if not candidates:
+            break
+        if len(candidates) != 1:
+            return None
+        next_point = candidates[0]
+        ordered.append(next_point)
+        previous, current = current, next_point
+
+    if len(ordered) != len(component):
+        return None
+    return np.asarray(ordered, dtype=float)
+
+
+def _endpoint_circle_roles(
+    endpoint_distances: np.ndarray,
+    inner_radius_px: float,
+    outer_radius_px: float,
+    boundary_tolerance_px: float,
+) -> Optional[tuple[str, str]]:
+    roles: list[str] = []
+    for endpoint_distance in endpoint_distances:
+        inner_delta = abs(float(endpoint_distance) - inner_radius_px)
+        outer_delta = abs(float(endpoint_distance) - outer_radius_px)
+        if inner_delta <= boundary_tolerance_px and outer_delta > boundary_tolerance_px:
+            roles.append("inner")
+            continue
+        if outer_delta <= boundary_tolerance_px and inner_delta > boundary_tolerance_px:
+            roles.append("outer")
+            continue
+        if inner_delta <= boundary_tolerance_px and outer_delta <= boundary_tolerance_px:
+            # TODO: Disambiguate endpoints when the annulus is too thin or tolerances overlap.
+            return None
+        return None
+
+    role_pair = (roles[0], roles[1])
+    if set(role_pair) != {"inner", "outer"}:
+        # TODO: Support components that contact the same boundary multiple times.
+        return None
+    return role_pair
+
+
+def _path_cumulative_lengths(path_xy: np.ndarray) -> np.ndarray:
+    if len(path_xy) == 0:
+        return np.empty(0, dtype=float)
+    if len(path_xy) == 1:
+        return np.zeros(1, dtype=float)
+
+    deltas = np.diff(path_xy, axis=0)
+    segment_lengths = np.hypot(deltas[:, 0], deltas[:, 1])
+    return np.concatenate(([0.0], np.cumsum(segment_lengths)))
+
+
+def _interpolate_path_point(
+    path_xy: np.ndarray,
+    cumulative_lengths: np.ndarray,
+    target_length: float,
+) -> np.ndarray:
+    if len(path_xy) == 1:
+        return path_xy[0].copy()
+
+    clamped_length = min(max(float(target_length), 0.0), float(cumulative_lengths[-1]))
+    upper_index = int(np.searchsorted(cumulative_lengths, clamped_length, side="right"))
+    if upper_index <= 0:
+        return path_xy[0].copy()
+    if upper_index >= len(path_xy):
+        return path_xy[-1].copy()
+
+    lower_index = upper_index - 1
+    lower_length = float(cumulative_lengths[lower_index])
+    upper_length = float(cumulative_lengths[upper_index])
+    if upper_length <= lower_length:
+        return path_xy[lower_index].copy()
+
+    fraction = (clamped_length - lower_length) / (upper_length - lower_length)
+    return path_xy[lower_index] + fraction * (path_xy[upper_index] - path_xy[lower_index])
+
+
+def _typed_vessel_masks(vessel_mask: np.ndarray, av_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Split the vessel mask into artery and vein masks using the AV segmentation."""
+    artery_mask = vessel_mask & np.isin(av_mask, (1, 3))
+    vein_mask = vessel_mask & np.isin(av_mask, (2, 3))
+    return artery_mask, vein_mask
+
+
+def _path_records_for_image(
+    image_id: str,
+    vessel_mask: np.ndarray,
+    vessel_type: str,
+    disc_center_xy: np.ndarray,
+    inner_circle: OverlayCircle,
+    outer_circle: OverlayCircle,
+    disc_radius_px: float,
+    samples_per_connection: int,
+    boundary_tolerance_px: float,
+    tangent_window_px: float,
+    measurement_step_px: float,
+) -> List[dict]:
+    if not np.any(vessel_mask):
+        return []
+
+    if samples_per_connection <= 0:
+        raise ValueError("samples_per_connection must be positive")
+
+    inner_radius_px = float(disc_radius_px * inner_circle.diameter)
+    outer_radius_px = float(disc_radius_px * outer_circle.diameter)
+    if outer_radius_px <= inner_radius_px:
+        raise ValueError("outer_circle must have a larger radius than inner_circle")
+
+    skeleton = _skeletonize(vessel_mask)
+    if not np.any(skeleton):
+        return []
+    full_skeleton_neighbors = _component_neighbor_map(np.argwhere(skeleton))
+
+    yy, xx = np.indices(vessel_mask.shape, dtype=float)
+    distances = np.hypot(xx - disc_center_xy[0], yy - disc_center_xy[1])
+    annulus_mask = skeleton & (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    components = _connected_components(annulus_mask)
+
+    records: List[dict] = []
+    connection_index = 0
+    for component in components:
+        ordered_path_yx = _ordered_path_component(component)
+        if ordered_path_yx is None:
+            logger.debug("Skipping %s annulus component because it is not a simple open path", image_id)
+            continue
+        if _has_branch_on_full_skeleton(ordered_path_yx, full_skeleton_neighbors):
+            # TODO: Support components whose annulus segment is simple but attaches to a branch outside the annulus.
+            logger.debug(
+                "Skipping %s annulus component because it branches in the full vessel skeleton",
+                image_id,
+            )
+            continue
+
+        path_xy = ordered_path_yx[:, ::-1]
+        endpoint_distances = np.array(
+            [
+                distances[int(ordered_path_yx[0, 0]), int(ordered_path_yx[0, 1])],
+                distances[int(ordered_path_yx[-1, 0]), int(ordered_path_yx[-1, 1])],
+            ],
+            dtype=float,
+        )
+        endpoint_roles = _endpoint_circle_roles(
+            endpoint_distances=endpoint_distances,
+            inner_radius_px=inner_radius_px,
+            outer_radius_px=outer_radius_px,
+            boundary_tolerance_px=boundary_tolerance_px,
+        )
+        if endpoint_roles is None:
+            logger.debug(
+                "Skipping %s annulus component because its endpoints are not a simple inner-to-outer pair",
+                image_id,
+            )
+            continue
+
+        if endpoint_roles[0] != "inner":
+            ordered_path_yx = ordered_path_yx[::-1]
+            path_xy = path_xy[::-1]
+            endpoint_distances = endpoint_distances[::-1]
+
+        cumulative_lengths = _path_cumulative_lengths(path_xy)
+        if len(cumulative_lengths) == 0 or cumulative_lengths[-1] <= 0.0:
+            logger.debug("Skipping %s annulus component because its path length is zero", image_id)
+            continue
+
+        component_records: List[dict] = []
+        connection_index += 1
+        for sample_index in range(1, samples_per_connection + 1):
+            target_fraction = sample_index / (samples_per_connection + 1)
+            center_xy = _interpolate_path_point(
+                path_xy=path_xy,
+                cumulative_lengths=cumulative_lengths,
+                target_length=float(cumulative_lengths[-1] * target_fraction),
+            )
+            width_value, start_xy, end_xy = measure_vessel_width_at_coordinate(
+                vessel_mask=vessel_mask,
+                point_xy=center_xy,
+                skeleton=skeleton,
+                tangent_window_px=tangent_window_px,
+                measurement_step_px=measurement_step_px,
+            )
+            if np.isnan(width_value):
+                # TODO: Recover from local tangent/width failures by re-sampling nearby skeleton points.
+                component_records = []
+                logger.debug(
+                    "Skipping %s connection %d because width measurement failed at sample %d",
+                    image_id,
+                    connection_index,
+                    sample_index,
+                )
+                break
+
+            component_records.append(
+                {
+                    "image_id": image_id,
+                    "inner_circle": inner_circle.name,
+                    "outer_circle": outer_circle.name,
+                    "inner_circle_radius_px": inner_radius_px,
+                    "outer_circle_radius_px": outer_radius_px,
+                    "connection_index": connection_index,
+                    "sample_index": sample_index,
+                    "x": float(center_xy[0]),
+                    "y": float(center_xy[1]),
+                    "width_px": float(width_value),
+                    "x_start": float(start_xy[0]),
+                    "y_start": float(start_xy[1]),
+                    "x_end": float(end_xy[0]),
+                    "y_end": float(end_xy[1]),
+                    "vessel_type": vessel_type,
+                }
+            )
+
+        if len(component_records) != samples_per_connection:
+            continue
+        records.extend(component_records)
+
+    return records
+
+
+def resolve_vessel_width_circle_pair(
+    circles: Sequence[OverlayCircle],
+    inner_circle_name: str | None = None,
+    outer_circle_name: str | None = None,
+) -> tuple[OverlayCircle, OverlayCircle]:
+    """Select the circle pair used for between-circle vessel width sampling."""
+    if len(circles) < 2:
+        raise ValueError("At least two overlay circles are required for vessel width sampling")
+
+    circles_by_name = {circle.name: circle for circle in circles}
+    if inner_circle_name is not None:
+        if inner_circle_name not in circles_by_name:
+            raise ValueError(f"Unknown inner circle '{inner_circle_name}'")
+        inner_circle = circles_by_name[inner_circle_name]
+    else:
+        inner_circle = min(circles, key=lambda circle: (circle.diameter, circle.name))
+
+    if outer_circle_name is not None:
+        if outer_circle_name not in circles_by_name:
+            raise ValueError(f"Unknown outer circle '{outer_circle_name}'")
+        outer_circle = circles_by_name[outer_circle_name]
+    else:
+        remaining_circles = [circle for circle in circles if circle.name != inner_circle.name]
+        larger_circles = [
+            circle for circle in remaining_circles if circle.diameter > inner_circle.diameter
+        ]
+        candidates = larger_circles if larger_circles else remaining_circles
+        outer_circle = min(candidates, key=lambda circle: (circle.diameter, circle.name))
+
+    if outer_circle.diameter <= inner_circle.diameter:
+        raise ValueError("outer_circle must have a larger diameter than inner_circle")
+    return inner_circle, outer_circle
+
+
+def measure_vessel_widths_between_disc_circle_pair(
+    vessels_dir: Path,
+    av_dir: Path,
+    disc_geometry_path: Path,
+    inner_circle: OverlayCircle,
+    outer_circle: OverlayCircle,
+    output_path: Optional[Path] = None,
+    samples_per_connection: int = 5,
+    boundary_tolerance_px: float = 1.5,
+    tangent_window_px: float = 10.0,
+    measurement_step_px: float = 0.25,
+) -> pd.DataFrame:
+    """Measure artery and vein widths separately at interior points between two circles."""
+    if not disc_geometry_path.exists():
+        raise FileNotFoundError(f"Disc geometry file not found: {disc_geometry_path}")
+    if not vessels_dir.exists():
+        raise FileNotFoundError(f"Vessels directory not found: {vessels_dir}")
+    if not av_dir.exists():
+        raise FileNotFoundError(f"AV directory not found: {av_dir}")
+
+    df_geometry = pd.read_csv(disc_geometry_path, index_col=0)
+    records: List[dict] = []
+
+    for image_id, row in df_geometry.iterrows():
+        if pd.isna(row["x_disc_center"]) or pd.isna(row["y_disc_center"]) or pd.isna(
+            row["disc_radius_px"]
+        ):
+            logger.warning("Skipping %s because disc geometry is missing", image_id)
+            continue
+
+        vessel_path = vessels_dir / f"{image_id}.png"
+        av_path = av_dir / f"{image_id}.png"
+        if not vessel_path.exists() or not av_path.exists():
+            logger.warning("Skipping %s because vessel or AV mask is missing", image_id)
+            continue
+
+        vessel_mask = np.array(Image.open(vessel_path)) > 0
+        av_mask = np.array(Image.open(av_path))
+        artery_mask, vein_mask = _typed_vessel_masks(vessel_mask, av_mask)
+        image_records: List[dict] = []
+        image_records.extend(
+            _path_records_for_image(
+                image_id=image_id,
+                vessel_mask=artery_mask,
+                vessel_type="artery",
+                disc_center_xy=np.array([row["x_disc_center"], row["y_disc_center"]], dtype=float),
+                inner_circle=inner_circle,
+                outer_circle=outer_circle,
+                disc_radius_px=float(row["disc_radius_px"]),
+                samples_per_connection=samples_per_connection,
+                boundary_tolerance_px=boundary_tolerance_px,
+                tangent_window_px=tangent_window_px,
+                measurement_step_px=measurement_step_px,
+            )
+        )
+        image_records.extend(
+            _path_records_for_image(
+                image_id=image_id,
+                vessel_mask=vein_mask,
+                vessel_type="vein",
+                disc_center_xy=np.array([row["x_disc_center"], row["y_disc_center"]], dtype=float),
+                inner_circle=inner_circle,
+                outer_circle=outer_circle,
+                disc_radius_px=float(row["disc_radius_px"]),
+                samples_per_connection=samples_per_connection,
+                boundary_tolerance_px=boundary_tolerance_px,
+                tangent_window_px=tangent_window_px,
+                measurement_step_px=measurement_step_px,
+            )
+        )
+        records.extend(image_records)
+
+    df_widths = pd.DataFrame.from_records(
+        records,
+        columns=[
+            "image_id",
+            "inner_circle",
+            "outer_circle",
+            "inner_circle_radius_px",
+            "outer_circle_radius_px",
+            "connection_index",
+            "sample_index",
+            "x",
+            "y",
+            "width_px",
+            "x_start",
+            "y_start",
+            "x_end",
+            "y_end",
+            "vessel_type",
+        ],
+    )
+    if output_path is not None:
+        df_widths.to_csv(output_path, index=False)
+        logger.info("Vessel path width measurements saved to %s", output_path)
+    return df_widths

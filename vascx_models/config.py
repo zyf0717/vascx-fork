@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable, Mapping
+
+import yaml
+
+
+DEFAULT_CONFIG_NAME = "config.yaml"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+@dataclass(frozen=True)
+class OverlayLayers:
+    arteries: bool = True
+    veins: bool = True
+    disc: bool = True
+    fovea: bool = True
+    vessel_widths: bool = True
+
+
+@dataclass(frozen=True)
+class OverlayColors:
+    artery: tuple[int, int, int] = (255, 0, 0)
+    vein: tuple[int, int, int] = (0, 0, 255)
+    vessel: tuple[int, int, int] = (255, 255, 255)
+    disc: tuple[int, int, int] = (255, 255, 255)
+    fovea: tuple[int, int, int] = (255, 255, 0)
+    vessel_width: tuple[int, int, int] = (0, 0, 0)
+
+
+@dataclass(frozen=True)
+class OverlayCircle:
+    name: str
+    diameter: float
+    color: tuple[int, int, int] = (0, 0, 0)
+
+
+def default_overlay_circles() -> tuple[OverlayCircle, ...]:
+    return (
+        OverlayCircle(name="2r", diameter=2.0),
+        OverlayCircle(name="3r", diameter=3.0),
+    )
+
+
+@dataclass(frozen=True)
+class OverlayConfig:
+    enabled: bool = True
+    layers: OverlayLayers = field(default_factory=OverlayLayers)
+    colors: OverlayColors = field(default_factory=OverlayColors)
+    circles: tuple[OverlayCircle, ...] = field(default_factory=default_overlay_circles)
+
+
+@dataclass(frozen=True)
+class VesselWidthConfig:
+    inner_circle: str | None = None
+    outer_circle: str | None = None
+    samples_per_connection: int = 5
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    overlay: OverlayConfig = field(default_factory=OverlayConfig)
+    vessel_widths: VesselWidthConfig = field(default_factory=VesselWidthConfig)
+    source_path: Path | None = None
+
+
+def default_config_candidates() -> list[Path]:
+    candidates = [Path.cwd() / DEFAULT_CONFIG_NAME, _repo_root() / DEFAULT_CONFIG_NAME]
+    unique_candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            unique_candidates.append(candidate)
+            seen.add(resolved)
+    return unique_candidates
+
+
+def resolve_config_path(config_path: str | Path | None) -> Path | None:
+    if config_path is not None:
+        candidate = Path(config_path).expanduser()
+        if not candidate.exists():
+            raise FileNotFoundError(f"Config file not found: {candidate}")
+        return candidate
+
+    for candidate in default_config_candidates():
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_app_config(config_path: str | Path | None = None) -> AppConfig:
+    resolved_path = resolve_config_path(config_path)
+    if resolved_path is None:
+        return AppConfig()
+
+    with resolved_path.open("r", encoding="utf-8") as handle:
+        raw_config = yaml.safe_load(handle) or {}
+
+    if not isinstance(raw_config, dict):
+        raise ValueError("Config root must be a mapping")
+
+    overlay_raw = raw_config.get("overlay", {})
+    if overlay_raw is None:
+        overlay_raw = {}
+    if not isinstance(overlay_raw, dict):
+        raise ValueError("'overlay' must be a mapping")
+
+    layer_overrides = overlay_raw.get("layers", {})
+    if layer_overrides is None:
+        layer_overrides = {}
+    if not isinstance(layer_overrides, dict):
+        raise ValueError("'overlay.layers' must be a mapping")
+
+    color_overrides = overlay_raw.get("colors", overlay_raw.get("colours", {}))
+    if color_overrides is None:
+        color_overrides = {}
+    if not isinstance(color_overrides, dict):
+        raise ValueError("'overlay.colors' must be a mapping")
+
+    vessel_widths_raw = raw_config.get("vessel_widths", {})
+    if vessel_widths_raw is None:
+        vessel_widths_raw = {}
+    if not isinstance(vessel_widths_raw, dict):
+        raise ValueError("'vessel_widths' must be a mapping")
+
+    raw_circles = overlay_raw.get("circles", None)
+    if raw_circles is None:
+        circles = default_overlay_circles()
+    else:
+        circles = _build_overlay_circles(raw_circles)
+
+    return AppConfig(
+        overlay=OverlayConfig(
+            enabled=_coerce_bool(overlay_raw.get("enabled", True), "overlay.enabled"),
+            layers=_build_overlay_layers(layer_overrides),
+            colors=_build_overlay_colors(color_overrides),
+            circles=circles,
+        ),
+        vessel_widths=_build_vessel_width_config(vessel_widths_raw),
+        source_path=resolved_path,
+    )
+
+
+def _build_overlay_layers(raw_layers: Mapping[str, object]) -> OverlayLayers:
+    defaults = OverlayLayers()
+    alias_map = {
+        "artery": "arteries",
+        "arteries": "arteries",
+        "vein": "veins",
+        "veins": "veins",
+        "disc": "disc",
+        "fovea": "fovea",
+        "vessel_width": "vessel_widths",
+        "vessel_widths": "vessel_widths",
+    }
+    values = defaults.__dict__.copy()
+    for raw_key, raw_value in raw_layers.items():
+        if raw_key not in alias_map:
+            raise ValueError(f"Unsupported overlay layer '{raw_key}'")
+        normalized_key = alias_map[raw_key]
+        values[normalized_key] = _coerce_bool(
+            raw_value, f"overlay.layers.{raw_key}"
+        )
+    return OverlayLayers(**values)
+
+
+def _build_overlay_colors(raw_colors: Mapping[str, object]) -> OverlayColors:
+    defaults = OverlayColors()
+    alias_map = {
+        "artery": "artery",
+        "arteries": "artery",
+        "vein": "vein",
+        "veins": "vein",
+        "vessel": "vessel",
+        "vessels": "vessel",
+        "disc": "disc",
+        "fovea": "fovea",
+        "vessel_width": "vessel_width",
+        "vessel_widths": "vessel_width",
+    }
+    values = defaults.__dict__.copy()
+    for raw_key, raw_value in raw_colors.items():
+        if raw_key not in alias_map:
+            raise ValueError(f"Unsupported overlay color '{raw_key}'")
+        normalized_key = alias_map[raw_key]
+        values[normalized_key] = _parse_rgb(raw_value, f"overlay.colors.{raw_key}")
+    return OverlayColors(**values)
+
+
+def _build_overlay_circles(raw_circles: object) -> tuple[OverlayCircle, ...]:
+    if not isinstance(raw_circles, list):
+        raise ValueError("'overlay.circles' must be a list")
+
+    circles: list[OverlayCircle] = []
+    seen_names: set[str] = set()
+    for index, raw_circle in enumerate(raw_circles):
+        field_name = f"overlay.circles[{index}]"
+        if not isinstance(raw_circle, Mapping):
+            raise ValueError(f"'{field_name}' must be a mapping")
+
+        unsupported_keys = set(raw_circle) - {"name", "diameter", "color", "colour"}
+        if unsupported_keys:
+            unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
+            raise ValueError(f"Unsupported keys in '{field_name}': {unsupported}")
+
+        if "name" not in raw_circle:
+            raise ValueError(f"'{field_name}.name' is required")
+        if "diameter" not in raw_circle:
+            raise ValueError(f"'{field_name}.diameter' is required")
+
+        circle_name = _coerce_circle_name(raw_circle["name"], f"{field_name}.name")
+        if circle_name in seen_names:
+            raise ValueError(f"Duplicate circle name '{circle_name}' in overlay.circles")
+
+        raw_color = raw_circle.get("color", raw_circle.get("colour", (0, 0, 0)))
+        circles.append(
+            OverlayCircle(
+                name=circle_name,
+                diameter=_coerce_positive_float(raw_circle["diameter"], f"{field_name}.diameter"),
+                color=_parse_rgb(raw_color, f"{field_name}.color"),
+            )
+        )
+        seen_names.add(circle_name)
+
+    return tuple(circles)
+
+
+def _build_vessel_width_config(raw_vessel_widths: Mapping[str, object]) -> VesselWidthConfig:
+    unsupported_keys = set(raw_vessel_widths) - {
+        "inner_circle",
+        "outer_circle",
+        "samples_per_connection",
+    }
+    if unsupported_keys:
+        unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
+        raise ValueError(f"Unsupported keys in 'vessel_widths': {unsupported}")
+
+    return VesselWidthConfig(
+        inner_circle=_coerce_optional_string(
+            raw_vessel_widths.get("inner_circle"), "vessel_widths.inner_circle"
+        ),
+        outer_circle=_coerce_optional_string(
+            raw_vessel_widths.get("outer_circle"), "vessel_widths.outer_circle"
+        ),
+        samples_per_connection=_coerce_positive_int(
+            raw_vessel_widths.get("samples_per_connection", 5),
+            "vessel_widths.samples_per_connection",
+        ),
+    )
+
+
+def _coerce_bool(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"'{field_name}' must be a boolean")
+
+
+def _coerce_positive_float(value: object, field_name: str) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    raise ValueError(f"'{field_name}' must be a positive number")
+
+
+def _coerce_positive_int(value: object, field_name: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    raise ValueError(f"'{field_name}' must be a positive integer")
+
+
+def _coerce_optional_string(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ValueError(f"'{field_name}' must be a non-empty string or null")
+
+
+def _coerce_circle_name(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"'{field_name}' must be a non-empty string")
+    normalized = value.strip()
+    if "/" in normalized or "\\" in normalized:
+        raise ValueError(f"'{field_name}' must not contain path separators")
+    return normalized
+
+
+def _parse_rgb(value: object, field_name: str) -> tuple[int, int, int]:
+    if isinstance(value, str):
+        return _parse_hex_color(value, field_name)
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        channels = tuple(value)
+        if len(channels) != 3:
+            raise ValueError(f"'{field_name}' must contain exactly 3 channels")
+        return tuple(_coerce_channel(channel, field_name) for channel in channels)
+    raise ValueError(
+        f"'{field_name}' must be a '#RRGGBB' string or a 3-item RGB sequence"
+    )
+
+
+def _parse_hex_color(value: str, field_name: str) -> tuple[int, int, int]:
+    normalized = value.strip()
+    if normalized.startswith("#"):
+        normalized = normalized[1:]
+    if len(normalized) != 6:
+        raise ValueError(f"'{field_name}' must be a 6-digit hex color")
+    try:
+        return tuple(int(normalized[index : index + 2], 16) for index in (0, 2, 4))
+    except ValueError as exc:
+        raise ValueError(f"'{field_name}' must be a valid hex color") from exc
+
+
+def _coerce_channel(value: object, field_name: str) -> int:
+    if isinstance(value, int) and 0 <= value <= 255:
+        return value
+    raise ValueError(f"'{field_name}' channels must be integers between 0 and 255")

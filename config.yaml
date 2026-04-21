@@ -1,0 +1,26 @@
+overlay:
+  enabled: true
+  layers:
+    arteries: true
+    veins: true
+    disc: true
+    fovea: true
+    vessel_widths: true
+  colours:
+    artery: "#FF0000"
+    vein: "#0000FF"
+    vessel: "#00FF00"
+    disc: "#FFFFFF"
+    fovea: "#FFFF00"
+    vessel_widths: "#00FF00"
+  circles:
+    - name: "2r"
+      diameter: 2.0
+      color: "#00FF00"
+    - name: "3r"
+      diameter: 3.0
+      color: "#00FF00"
+vessel_widths:
+  inner_circle: "2r"
+  outer_circle: "3r"
+  samples_per_connection: 5
