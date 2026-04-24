@@ -97,6 +97,8 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         "\n".join(
             [
                 "overlay:",
+                "  layers:",
+                "    vessel_widths: false",
                 "  colours:",
                 "    artery: '#AA0000'",
                 "    vein: '#0000BB'",
@@ -152,10 +154,12 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert len(overlay_calls) == 2
     assert overlay_calls[0]["output_dir"] == output_dir / "overlays"
     assert overlay_calls[0]["vessels_dir"] == output_dir / "vessels"
+    assert overlay_calls[0]["overlay_config"].layers.vessel_widths is False
     measurement_data = overlay_calls[0]["vessel_width_data"]
     assert isinstance(measurement_data, pd.DataFrame)
     assert measurement_data.iloc[0]["width_px"] == 7.0
     assert overlay_calls[1]["output_dir"] == output_dir / "vessel_equivalent_overlays"
+    assert overlay_calls[1]["overlay_config"].layers.vessel_widths is True
     selected_measurement_data = overlay_calls[1]["vessel_width_data"]
     assert isinstance(selected_measurement_data, pd.DataFrame)
     assert selected_measurement_data.iloc[0]["width_px"] == 7.0
