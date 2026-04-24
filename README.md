@@ -115,6 +115,17 @@ vessel_widths:
   samples_per_connection: 5
 ```
 
+Vessel widths are sampled between the configured inner and outer disc circles.
+Each retained vessel connection receives `samples_per_connection` interior
+measurements. Widths are measured perpendicular to the local skeleton tangent.
+
+Fork handling is intentionally trunk-focused:
+
+- vessel components must be traceable from the inner circle to the outer circle
+- dead-end side branches are discarded
+- for a fork inside the annulus, only the pre-fork trunk segment is measured
+- downstream daughter branches are not measured for width or CRAE/CRVE selection
+
 ## Outputs
 
 ```text
@@ -133,6 +144,37 @@ OUTPUT_PATH/
 ├── quality.csv
 └── fovea.csv
 ```
+
+Key CSV outputs:
+
+- `quality.csv`: image quality scores.
+- `fovea.csv`: detected fovea coordinates.
+- `disc_geometry.csv`: optic disc center and radius used for circle generation.
+- `vessel_widths.csv`: per-sample vessel width measurements, including measurement
+  endpoints (`x_start`, `y_start`, `x_end`, `y_end`) for overlay rendering.
+- `vessel_equivalents.csv`: CRAE/CRVE summary per image and vessel type.
+
+`vessel_equivalents.csv` includes:
+
+- `metric`: `CRAE` for arteries or `CRVE` for veins.
+- `requested_n_largest`: number of vessels requested for the equivalent formula,
+  currently 6.
+- `n_vessels_available`: retained measured vessels available for that image/type.
+- `n_vessels_used`: number actually used. If fewer than 6 are available, all
+  available vessels are used.
+- `vessel_ids_used`: semicolon-separated IDs such as `artery_7;artery_3`.
+- `mean_widths_used_px`: semicolon-separated mean vessel widths in pixels.
+- `equivalent_px`: recursive Knudtson-Parr-Hubbard equivalent in pixels. This is
+  `NaN` when fewer than two vessels are available for a type.
+
+Overlay directories:
+
+- `overlays/`: standard segmentation and measurement overlay.
+- `vessel_equivalent_overlays/`: highlights only the width measurements from
+  vessels selected for CRAE/CRVE calculation.
+
+The CRAE/CRVE values are pixel-space equivalents unless you apply an external
+pixel-to-length calibration.
 
 ## Testing
 
