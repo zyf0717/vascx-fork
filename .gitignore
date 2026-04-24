@@ -56,3 +56,6 @@ output_*.zip
 
 # OS files
 .DS_Store
+
+# ZIP files
+*.zip
