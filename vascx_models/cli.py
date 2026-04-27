@@ -115,6 +115,36 @@ def _load_fovea_overlay_data(fovea_path: Path) -> dict[str, tuple[int, int]] | N
     }
 
 
+def _refresh_vessel_metric_disc_artifacts(
+    output_path: Path,
+    config_path: Path | None = None,
+) -> None:
+    disc_circles_dir = output_path / "disc_circles"
+    if disc_circles_dir.exists():
+        shutil.rmtree(disc_circles_dir)
+
+    try:
+        app_config = load_app_config(config_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    disc_dir = output_path / "disc"
+    if not disc_dir.is_dir():
+        logger.warning(
+            "Skipping disc circle regeneration because %s is missing",
+            disc_dir,
+        )
+        return
+
+    generate_disc_circles(
+        disc_dir=disc_dir,
+        circle_output_dir=disc_circles_dir,
+        circles=app_config.overlay.circles,
+        measurements_path=output_path / "disc_geometry.csv",
+    )
+    logger.info("Disc circle regeneration complete in %s", output_path)
+
+
 def _refresh_vessel_metric_overlays(
     output_path: Path,
     df_vessel_widths: pd.DataFrame,
@@ -304,6 +334,10 @@ def vessel_metrics(
             source_output_path=source_output_path,
             output_path=output_path,
         )
+    )
+    _refresh_vessel_metric_disc_artifacts(
+        output_path=output_path,
+        config_path=config_path,
     )
     (
         df_vessel_widths,

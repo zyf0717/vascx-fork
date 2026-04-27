@@ -23,7 +23,7 @@ overlay:
 vessel_widths:
   inner_circle: "2r"
   outer_circle: "3r"
-  samples_per_connection: -1 # <0 measures every interior path pixel, excluding endpoints
+  samples_per_connection: 5 # -1 measures every interior path pixel, excluding endpoints
   method: "mask"
   pvbm_mask:
     direction_lag_px: 6.0

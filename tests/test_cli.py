@@ -253,6 +253,10 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
     source_dir = tmp_path / "source"
     output_dir = tmp_path / "metrics"
     _write_minimal_vessel_metric_intermediates(source_dir)
+    (source_dir / "disc").mkdir()
+    (source_dir / "disc" / "sample.png").write_bytes(b"disc")
+    (source_dir / "disc_circles").mkdir()
+    (source_dir / "disc_circles" / "stale.txt").write_text("stale", encoding="utf-8")
     (source_dir / "overlays").mkdir()
     (source_dir / "overlays" / "stale.png").write_text("stale", encoding="utf-8")
     (source_dir / "vessel_equivalent_overlays").mkdir()
@@ -347,6 +351,27 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
         fake_measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
     )
 
+    def fake_generate_disc_circles(**kwargs):
+        calls["generate_disc_circles"] = kwargs
+        kwargs["circle_output_dir"].mkdir(parents=True, exist_ok=True)
+        (kwargs["circle_output_dir"] / "fresh.txt").write_text(
+            "fresh", encoding="utf-8"
+        )
+        pd.DataFrame(
+            {
+                "x_disc_center": [16.0],
+                "y_disc_center": [16.0],
+                "disc_radius_px": [5.0],
+                "circle_2r_px": [10.0],
+                "circle_3r_px": [15.0],
+            },
+            index=["sample"],
+        ).to_csv(kwargs["measurements_path"])
+
+    monkeypatch.setattr(
+        "vascx_models.cli.generate_disc_circles", fake_generate_disc_circles
+    )
+
     def fake_batch_create_overlays(**kwargs):
         calls.setdefault("batch_create_overlays", []).append(kwargs)
         kwargs["output_dir"].mkdir(parents=True, exist_ok=True)
@@ -395,7 +420,14 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
     assert (output_dir / "quality.csv").read_text(encoding="utf-8") == (
         "image_id,q1,q2,q3\n"
     )
+    assert calls["generate_disc_circles"]["disc_dir"] == output_dir / "disc"
+    assert (
+        calls["generate_disc_circles"]["circle_output_dir"]
+        == output_dir / "disc_circles"
+    )
     assert (output_dir / "disc_geometry.csv").exists()
+    assert not (output_dir / "disc_circles" / "stale.txt").exists()
+    assert (output_dir / "disc_circles" / "fresh.txt").exists()
     assert calls["measure_vessel_widths"]["vessels_dir"] == output_dir / "vessels"
     assert calls["measure_vessel_widths"]["av_dir"] == output_dir / "artery_vein"
     assert calls["measure_vessel_widths"]["disc_geometry_path"] == (
