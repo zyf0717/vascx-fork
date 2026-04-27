@@ -140,6 +140,7 @@ OUTPUT_PATH/
 ├── bounds.csv
 ├── disc_geometry.csv
 ├── vessel_widths.csv
+├── vessel_tortuosities.csv
 ├── vessel_equivalents.csv
 ├── quality.csv
 └── fovea.csv
@@ -152,6 +153,8 @@ Key CSV outputs:
 - `disc_geometry.csv`: optic disc center and radius used for circle generation.
 - `vessel_widths.csv`: per-sample vessel width measurements, including measurement
   endpoints (`x_start`, `y_start`, `x_end`, `y_end`) for overlay rendering.
+- `vessel_tortuosities.csv`: per-vessel path tortuosity, computed as skeleton
+  path length divided by endpoint chord length for each retained vessel trace.
 - `vessel_equivalents.csv`: CRAE/CRVE summary per image and vessel type.
 
 `vessel_equivalents.csv` includes:
@@ -166,6 +169,8 @@ Key CSV outputs:
 - `mean_widths_used_px`: semicolon-separated mean vessel widths in pixels.
 - `equivalent_px`: recursive Knudtson-Parr-Hubbard equivalent in pixels. This is
   `NaN` when fewer than two vessels are available for a type.
+- `mean_tortuosity_used`: mean tortuosity across the same top-width vessels used
+  for the CRAE/CRVE row.
 
 Overlay directories:
 

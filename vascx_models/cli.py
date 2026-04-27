@@ -24,7 +24,7 @@ from .inference import (
 )
 from .vessel_widths import (
     compute_revised_crx_from_widths,
-    measure_vessel_widths_between_disc_circle_pair,
+    measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
     resolve_vessel_width_circle_pair,
     select_vessel_width_measurements_for_equivalents,
 )
@@ -142,6 +142,9 @@ def run(
     fovea_path = output_path / "fovea.csv" if fovea else None
     disc_geometry_path = output_path / "disc_geometry.csv" if disc else None
     vessel_widths_path = output_path / "vessel_widths.csv" if disc and vessels else None
+    vessel_tortuosities_path = (
+        output_path / "vessel_tortuosities.csv" if disc and vessels else None
+    )
     vessel_equivalents_path = (
         output_path / "vessel_equivalents.csv" if disc and vessels else None
     )
@@ -280,17 +283,22 @@ def run(
             outer_circle.name,
             app_config.vessel_widths.samples_per_connection,
         )
-        df_vessel_widths = measure_vessel_widths_between_disc_circle_pair(
+        (
+            df_vessel_widths,
+            df_vessel_tortuosities,
+        ) = measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
             vessels_dir=vessels_path,
             av_dir=av_path,
             disc_geometry_path=disc_geometry_path,
             inner_circle=inner_circle,
             outer_circle=outer_circle,
             output_path=vessel_widths_path,
+            tortuosity_output_path=vessel_tortuosities_path,
             samples_per_connection=app_config.vessel_widths.samples_per_connection,
         )
         df_connection_widths, df_vessel_equivalents = compute_revised_crx_from_widths(
             df_vessel_widths,
+            df_tortuosities=df_vessel_tortuosities,
         )
         df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
         logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)

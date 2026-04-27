@@ -9,6 +9,7 @@ from vascx_models.config import OverlayCircle
 from vascx_models.vessel_widths import (
     compute_revised_crx_from_widths,
     measure_vessel_width_at_coordinate,
+    measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
     measure_vessel_widths_between_disc_circle_pair,
     resolve_vessel_width_circle_pair,
     select_vessel_width_measurements_for_equivalents,
@@ -41,6 +42,30 @@ def _vessel_width_record(
         "y_start": 0.0,
         "x_end": 1.0,
         "y_end": 1.0,
+        "vessel_type": vessel_type,
+    }
+
+
+def _vessel_tortuosity_record(
+    connection_index: int,
+    tortuosity: float,
+    vessel_type: str = "artery",
+    image_id: str = "sample",
+) -> dict[str, object]:
+    return {
+        "image_id": image_id,
+        "inner_circle": "2r",
+        "outer_circle": "3r",
+        "inner_circle_radius_px": 40.0,
+        "outer_circle_radius_px": 60.0,
+        "connection_index": connection_index,
+        "x_start": 0.0,
+        "y_start": 0.0,
+        "x_end": 1.0,
+        "y_end": 1.0,
+        "path_length_px": tortuosity,
+        "chord_length_px": 1.0,
+        "tortuosity": tortuosity,
         "vessel_type": vessel_type,
     }
 
@@ -141,6 +166,41 @@ def test_compute_revised_crx_from_widths_limits_selection_to_six_largest() -> No
     assert set(selected["connection_index"]) == {3, 4, 5, 6, 7, 8}
     assert len(selected) == 12
     assert ("sample", "artery") in rounds
+
+
+def test_compute_revised_crx_from_widths_aggregates_selected_tortuosity() -> None:
+    width_records = []
+    tortuosity_records = []
+    for connection_index in range(1, 9):
+        for sample_index in range(1, 3):
+            width_records.append(
+                _vessel_width_record(
+                    connection_index=connection_index,
+                    sample_index=sample_index,
+                    width_px=float(connection_index),
+                    vessel_type="artery",
+                )
+            )
+        tortuosity_records.append(
+            _vessel_tortuosity_record(
+                connection_index=connection_index,
+                tortuosity=1.0 + connection_index / 10.0,
+                vessel_type="artery",
+            )
+        )
+    df_widths = pd.DataFrame.from_records(width_records)
+    df_tortuosities = pd.DataFrame.from_records(tortuosity_records)
+
+    df_connections, df_equivalents = compute_revised_crx_from_widths(
+        df_widths,
+        df_tortuosities=df_tortuosities,
+    )
+
+    selected_connection_ids = df_connections.loc[
+        df_connections["selected_for_equivalent"], "connection_index"
+    ].tolist()
+    assert selected_connection_ids == [3, 4, 5, 6, 7, 8]
+    assert df_equivalents.iloc[0]["mean_tortuosity_used"] == pytest.approx(1.55)
 
 
 def test_compute_revised_crx_from_widths_reports_single_vessel_without_equivalent() -> None:
@@ -366,6 +426,75 @@ def test_measure_vessel_widths_between_disc_circle_pair_samples_interior_points(
         133.33333333333334,
         136.66666666666666,
     ])
+
+
+def test_measure_vessel_widths_and_tortuosities_between_disc_circle_pair_writes_vessel_tortuosity(
+    tmp_path: Path,
+) -> None:
+    vessels_dir = tmp_path / "vessels"
+    av_dir = tmp_path / "artery_vein"
+    vessels_dir.mkdir()
+    av_dir.mkdir()
+
+    height = width = 160
+    vessel = np.zeros((height, width), dtype=np.uint8)
+    av = np.zeros((height, width), dtype=np.uint8)
+
+    x_center = 80
+    vessel[:, x_center - 3 : x_center + 4] = 1
+    av[:, x_center - 3 : x_center + 4] = 2
+
+    _write_mask(vessels_dir / "sample.png", vessel)
+    _write_mask(av_dir / "sample.png", av)
+
+    geometry_path = tmp_path / "disc_geometry.csv"
+    pd.DataFrame(
+        {
+            "x_disc_center": [80.0],
+            "y_disc_center": [80.0],
+            "disc_radius_px": [20.0],
+        },
+        index=["sample"],
+    ).to_csv(geometry_path)
+
+    tortuosity_output_path = tmp_path / "vessel_tortuosities.csv"
+    (
+        df_widths,
+        df_tortuosities,
+    ) = measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
+        vessels_dir=vessels_dir,
+        av_dir=av_dir,
+        disc_geometry_path=geometry_path,
+        inner_circle=OverlayCircle(name="inner", diameter=2.0),
+        outer_circle=OverlayCircle(name="outer", diameter=3.0),
+        tortuosity_output_path=tortuosity_output_path,
+        samples_per_connection=5,
+    )
+
+    assert len(df_widths) == 10
+    assert tortuosity_output_path.exists()
+    assert df_tortuosities.columns.tolist() == [
+        "image_id",
+        "inner_circle",
+        "outer_circle",
+        "inner_circle_radius_px",
+        "outer_circle_radius_px",
+        "connection_index",
+        "x_start",
+        "y_start",
+        "x_end",
+        "y_end",
+        "path_length_px",
+        "chord_length_px",
+        "tortuosity",
+        "vessel_type",
+    ]
+    assert len(df_tortuosities) == 2
+    assert df_tortuosities["tortuosity"].tolist() == pytest.approx([1.0, 1.0])
+    assert (df_tortuosities["path_length_px"] > 0).all()
+    assert df_tortuosities["path_length_px"].tolist() == pytest.approx(
+        df_tortuosities["chord_length_px"].tolist()
+    )
 
 
 def test_measure_vessel_widths_between_disc_circle_pair_separates_arteries_and_veins(

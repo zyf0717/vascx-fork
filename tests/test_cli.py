@@ -1,9 +1,9 @@
+import logging
 from pathlib import Path
 
-import logging
 import pandas as pd
-from click.testing import CliRunner
 import torch
+from click.testing import CliRunner
 from PIL import Image
 
 from vascx_models.cli import cli
@@ -28,7 +28,9 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         calls["device_name"] = device_name
         return torch.device("cpu")
 
-    monkeypatch.setattr("vascx_models.cli.available_device_types", fake_available_device_types)
+    monkeypatch.setattr(
+        "vascx_models.cli.available_device_types", fake_available_device_types
+    )
     monkeypatch.setattr("vascx_models.cli.resolve_device", fake_resolve_device)
 
     def fake_run_segmentation_vessels_and_av(**kwargs):
@@ -41,9 +43,15 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         "vascx_models.cli.run_segmentation_vessels_and_av",
         fake_run_segmentation_vessels_and_av,
     )
-    monkeypatch.setattr("vascx_models.cli.run_segmentation_disc", fake_run_segmentation_disc)
-    monkeypatch.setattr("vascx_models.cli.run_quality_estimation", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr("vascx_models.cli.run_fovea_detection", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        "vascx_models.cli.run_segmentation_disc", fake_run_segmentation_disc
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_quality_estimation", lambda **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_fovea_detection", lambda **kwargs: pd.DataFrame()
+    )
 
     def fake_generate_disc_circles(**kwargs):
         calls["generate_disc_circles"] = kwargs
@@ -56,7 +64,7 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
             index=["sample"],
         ).to_csv(kwargs["measurements_path"])
 
-    def fake_measure_vessel_widths_between_disc_circle_pair(**kwargs):
+    def fake_measure_vessel_widths_and_tortuosities_between_disc_circle_pair(**kwargs):
         calls["measure_vessel_widths"] = kwargs
         df = pd.DataFrame(
             [
@@ -80,17 +88,42 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
             ]
         )
         df.to_csv(kwargs["output_path"], index=False)
-        return df
+        df_tortuosities = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 1,
+                    "x_start": 16.0,
+                    "y_start": 10.0,
+                    "x_end": 16.0,
+                    "y_end": 15.0,
+                    "path_length_px": 5.0,
+                    "chord_length_px": 5.0,
+                    "tortuosity": 1.0,
+                    "vessel_type": "artery",
+                }
+            ]
+        )
+        df_tortuosities.to_csv(kwargs["tortuosity_output_path"], index=False)
+        return df, df_tortuosities
 
     def fake_batch_create_overlays(**kwargs):
         calls.setdefault("batch_create_overlays", []).append(kwargs)
 
-    monkeypatch.setattr("vascx_models.cli.generate_disc_circles", fake_generate_disc_circles)
     monkeypatch.setattr(
-        "vascx_models.cli.measure_vessel_widths_between_disc_circle_pair",
-        fake_measure_vessel_widths_between_disc_circle_pair,
+        "vascx_models.cli.generate_disc_circles", fake_generate_disc_circles
     )
-    monkeypatch.setattr("vascx_models.cli.batch_create_overlays", fake_batch_create_overlays)
+    monkeypatch.setattr(
+        "vascx_models.cli.measure_vessel_widths_and_tortuosities_between_disc_circle_pair",
+        fake_measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.batch_create_overlays", fake_batch_create_overlays
+    )
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -147,6 +180,9 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert calls["run_segmentation_disc"]["disc_color"] == (221, 221, 221)
     assert calls["measure_vessel_widths"]["inner_circle"].name == "2r"
     assert calls["measure_vessel_widths"]["outer_circle"].name == "3r"
+    assert calls["measure_vessel_widths"]["tortuosity_output_path"] == (
+        output_dir / "vessel_tortuosities.csv"
+    )
     assert calls["measure_vessel_widths"]["samples_per_connection"] == 4
     assert calls["generate_disc_circles"]["circles"][0].name == "2r"
     assert calls["generate_disc_circles"]["circles"][0].color == (0, 255, 0)
@@ -175,10 +211,12 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         "vessel_ids_used",
         "mean_widths_used_px",
         "equivalent_px",
+        "mean_tortuosity_used",
     ]
     assert vessel_equivalents.iloc[0]["metric"] == "CRAE"
     assert vessel_equivalents.iloc[0]["vessel_ids_used"] == "artery_1"
     assert vessel_equivalents.iloc[0]["n_vessels_used"] == 1
+    assert vessel_equivalents.iloc[0]["mean_tortuosity_used"] == 1.0
 
 
 def test_cli_run_reports_missing_path_column_in_csv(tmp_path: Path, caplog) -> None:
@@ -227,8 +265,12 @@ def test_cli_run_accepts_explicit_device_and_logs_selection(
         return torch.device("cpu")
 
     monkeypatch.setattr("vascx_models.cli.resolve_device", fake_resolve_device)
-    monkeypatch.setattr("vascx_models.cli.run_quality_estimation", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr("vascx_models.cli.run_fovea_detection", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        "vascx_models.cli.run_quality_estimation", lambda **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_fovea_detection", lambda **kwargs: pd.DataFrame()
+    )
 
     with caplog.at_level(logging.INFO):
         result = CliRunner().invoke(

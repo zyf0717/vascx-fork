@@ -24,6 +24,41 @@ _NEIGHBORS_8: tuple[tuple[int, int], ...] = (
     (1, 1),
 )
 
+VESSEL_WIDTH_COLUMNS = [
+    "image_id",
+    "inner_circle",
+    "outer_circle",
+    "inner_circle_radius_px",
+    "outer_circle_radius_px",
+    "connection_index",
+    "sample_index",
+    "x",
+    "y",
+    "width_px",
+    "x_start",
+    "y_start",
+    "x_end",
+    "y_end",
+    "vessel_type",
+]
+
+VESSEL_TORTUOSITY_COLUMNS = [
+    "image_id",
+    "inner_circle",
+    "outer_circle",
+    "inner_circle_radius_px",
+    "outer_circle_radius_px",
+    "connection_index",
+    "x_start",
+    "y_start",
+    "x_end",
+    "y_end",
+    "path_length_px",
+    "chord_length_px",
+    "tortuosity",
+    "vessel_type",
+]
+
 
 def _skeletonize(binary_mask: np.ndarray) -> np.ndarray:
     """Thin a binary mask to a one-pixel-wide skeleton."""
@@ -212,7 +247,9 @@ def measure_vessel_width_at_coordinate(
     )
 
 
-def _component_neighbor_map(component: np.ndarray) -> dict[tuple[int, int], list[tuple[int, int]]]:
+def _component_neighbor_map(
+    component: np.ndarray,
+) -> dict[tuple[int, int], list[tuple[int, int]]]:
     points = {tuple(int(value) for value in coord) for coord in component.tolist()}
     neighbors: dict[tuple[int, int], list[tuple[int, int]]] = {}
     for y, x in points:
@@ -220,8 +257,10 @@ def _component_neighbor_map(component: np.ndarray) -> dict[tuple[int, int], list
         for dy, dx in _NEIGHBORS_8:
             candidate = (y + dy, x + dx)
             if candidate in points:
-                if dy != 0 and dx != 0 and (
-                    (y + dy, x) in points or (y, x + dx) in points
+                if (
+                    dy != 0
+                    and dx != 0
+                    and ((y + dy, x) in points or (y, x + dx) in points)
                 ):
                     continue
                 adjacent.append(candidate)
@@ -236,7 +275,10 @@ def _boundary_roles_for_component(
     outer_radius_px: float,
     boundary_tolerance_px: float,
 ) -> dict[tuple[int, int], str]:
-    candidates: dict[str, list[tuple[float, tuple[int, int]]]] = {"inner": [], "outer": []}
+    candidates: dict[str, list[tuple[float, tuple[int, int]]]] = {
+        "inner": [],
+        "outer": [],
+    }
     roles: dict[tuple[int, int], str] = {}
     for y_value, x_value in component:
         y = int(y_value)
@@ -302,7 +344,9 @@ def _prune_to_inner_outer_nodes(
         node = queue.popleft()
         if node not in active_nodes or node in terminal_nodes:
             continue
-        active_degree = sum(1 for neighbor in neighbors[node] if neighbor in active_nodes)
+        active_degree = sum(
+            1 for neighbor in neighbors[node] if neighbor in active_nodes
+        )
         if active_degree > 1:
             continue
 
@@ -311,7 +355,9 @@ def _prune_to_inner_outer_nodes(
             if neighbor not in active_nodes or neighbor in terminal_nodes:
                 continue
             neighbor_degree = sum(
-                1 for next_neighbor in neighbors[neighbor] if next_neighbor in active_nodes
+                1
+                for next_neighbor in neighbors[neighbor]
+                if next_neighbor in active_nodes
             )
             if neighbor_degree <= 1:
                 queue.append(neighbor)
@@ -386,7 +432,9 @@ def _trace_segments_between_key_nodes(
             current = first_neighbor
 
             while current not in key_nodes:
-                candidates = [neighbor for neighbor in graph[current] if neighbor != previous]
+                candidates = [
+                    neighbor for neighbor in graph[current] if neighbor != previous
+                ]
                 if len(candidates) != 1:
                     break
                 next_node = candidates[0]
@@ -430,9 +478,7 @@ def _inner_outer_branch_segments(
     segments: list[np.ndarray] = []
 
     for group in _connected_node_groups(active_graph):
-        group_roles = {
-            role for node, role in boundary_roles.items() if node in group
-        }
+        group_roles = {role for node, role in boundary_roles.items() if node in group}
         if group_roles != {"inner", "outer"}:
             continue
 
@@ -440,22 +486,24 @@ def _inner_outer_branch_segments(
         key_nodes = {
             node
             for node, adjacent in group_graph.items()
-            if node in boundary_roles
-            or len(adjacent) != 2
+            if node in boundary_roles or len(adjacent) != 2
         }
         if len(key_nodes) < 2:
             continue
 
-        for segment in _trace_segments_between_key_nodes(group_graph, key_nodes, boundary_roles):
+        for segment in _trace_segments_between_key_nodes(
+            group_graph, key_nodes, boundary_roles
+        ):
             endpoint_roles = {
                 boundary_roles.get((int(segment[0, 0]), int(segment[0, 1]))),
                 boundary_roles.get((int(segment[-1, 0]), int(segment[-1, 1]))),
             }
             if "inner" not in endpoint_roles:
                 continue
-            if distances[int(segment[0, 0]), int(segment[0, 1])] > distances[
-                int(segment[-1, 0]), int(segment[-1, 1])
-            ]:
+            if (
+                distances[int(segment[0, 0]), int(segment[0, 1])]
+                > distances[int(segment[-1, 0]), int(segment[-1, 1])]
+            ):
                 segment = segment[::-1]
             segments.append(segment)
 
@@ -495,7 +543,9 @@ def _interpolate_path_point(
         return path_xy[lower_index].copy()
 
     fraction = (clamped_length - lower_length) / (upper_length - lower_length)
-    return path_xy[lower_index] + fraction * (path_xy[upper_index] - path_xy[lower_index])
+    return path_xy[lower_index] + fraction * (
+        path_xy[upper_index] - path_xy[lower_index]
+    )
 
 
 def _typed_vessel_masks(
@@ -520,9 +570,9 @@ def _path_records_for_image(
     boundary_tolerance_px: float,
     tangent_window_px: float,
     measurement_step_px: float,
-) -> List[dict]:
+) -> tuple[List[dict], List[dict]]:
     if not np.any(vessel_mask):
-        return []
+        return [], []
 
     if samples_per_connection <= 0:
         raise ValueError("samples_per_connection must be positive")
@@ -534,14 +584,17 @@ def _path_records_for_image(
 
     skeleton = _skeletonize(vessel_mask)
     if not np.any(skeleton):
-        return []
+        return [], []
 
     yy, xx = np.indices(vessel_mask.shape, dtype=float)
     distances = np.hypot(xx - disc_center_xy[0], yy - disc_center_xy[1])
-    annulus_mask = skeleton & (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    annulus_mask = (
+        skeleton & (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    )
     components = _connected_components(annulus_mask)
 
-    records: List[dict] = []
+    width_records: List[dict] = []
+    tortuosity_records: List[dict] = []
     connection_index = 0
     for component in components:
         branch_segments_yx = _inner_outer_branch_segments(
@@ -569,6 +622,13 @@ def _path_records_for_image(
                 )
                 continue
 
+            path_length_px = float(cumulative_lengths[-1])
+            chord_length_px = float(np.linalg.norm(path_xy[-1] - path_xy[0]))
+            tortuosity = (
+                path_length_px / chord_length_px
+                if chord_length_px > 0.0
+                else float("nan")
+            )
             segment_skeleton = np.zeros_like(skeleton, dtype=bool)
             segment_rows = segment_yx[:, 0].astype(int)
             segment_cols = segment_yx[:, 1].astype(int)
@@ -624,9 +684,27 @@ def _path_records_for_image(
 
             if len(component_records) != samples_per_connection:
                 continue
-            records.extend(component_records)
+            width_records.extend(component_records)
+            tortuosity_records.append(
+                {
+                    "image_id": image_id,
+                    "inner_circle": inner_circle.name,
+                    "outer_circle": outer_circle.name,
+                    "inner_circle_radius_px": inner_radius_px,
+                    "outer_circle_radius_px": outer_radius_px,
+                    "connection_index": connection_index,
+                    "x_start": float(path_xy[0, 0]),
+                    "y_start": float(path_xy[0, 1]),
+                    "x_end": float(path_xy[-1, 0]),
+                    "y_end": float(path_xy[-1, 1]),
+                    "path_length_px": path_length_px,
+                    "chord_length_px": chord_length_px,
+                    "tortuosity": float(tortuosity),
+                    "vessel_type": vessel_type,
+                }
+            )
 
-    return records
+    return width_records, tortuosity_records
 
 
 def resolve_vessel_width_circle_pair(
@@ -636,7 +714,9 @@ def resolve_vessel_width_circle_pair(
 ) -> tuple[OverlayCircle, OverlayCircle]:
     """Select the circle pair used for between-circle vessel width sampling."""
     if len(circles) < 2:
-        raise ValueError("At least two overlay circles are required for vessel width sampling")
+        raise ValueError(
+            "At least two overlay circles are required for vessel width sampling"
+        )
 
     circles_by_name = {circle.name: circle for circle in circles}
     if inner_circle_name is not None:
@@ -651,16 +731,101 @@ def resolve_vessel_width_circle_pair(
             raise ValueError(f"Unknown outer circle '{outer_circle_name}'")
         outer_circle = circles_by_name[outer_circle_name]
     else:
-        remaining_circles = [circle for circle in circles if circle.name != inner_circle.name]
+        remaining_circles = [
+            circle for circle in circles if circle.name != inner_circle.name
+        ]
         larger_circles = [
-            circle for circle in remaining_circles if circle.diameter > inner_circle.diameter
+            circle
+            for circle in remaining_circles
+            if circle.diameter > inner_circle.diameter
         ]
         candidates = larger_circles if larger_circles else remaining_circles
-        outer_circle = min(candidates, key=lambda circle: (circle.diameter, circle.name))
+        outer_circle = min(
+            candidates, key=lambda circle: (circle.diameter, circle.name)
+        )
 
     if outer_circle.diameter <= inner_circle.diameter:
         raise ValueError("outer_circle must have a larger diameter than inner_circle")
     return inner_circle, outer_circle
+
+
+def measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
+    vessels_dir: Path,
+    av_dir: Path,
+    disc_geometry_path: Path,
+    inner_circle: OverlayCircle,
+    outer_circle: OverlayCircle,
+    output_path: Optional[Path] = None,
+    tortuosity_output_path: Optional[Path] = None,
+    samples_per_connection: int = 5,
+    boundary_tolerance_px: float = 1.5,
+    tangent_window_px: float = 10.0,
+    measurement_step_px: float = 0.25,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Measure vessel widths and path tortuosities between two circles."""
+    if not disc_geometry_path.exists():
+        raise FileNotFoundError(f"Disc geometry file not found: {disc_geometry_path}")
+    if not vessels_dir.exists():
+        raise FileNotFoundError(f"Vessels directory not found: {vessels_dir}")
+    if not av_dir.exists():
+        raise FileNotFoundError(f"AV directory not found: {av_dir}")
+
+    df_geometry = pd.read_csv(disc_geometry_path, index_col=0)
+    width_records: List[dict] = []
+    tortuosity_records: List[dict] = []
+
+    for image_id, row in df_geometry.iterrows():
+        if (
+            pd.isna(row["x_disc_center"])
+            or pd.isna(row["y_disc_center"])
+            or pd.isna(row["disc_radius_px"])
+        ):
+            logger.warning("Skipping %s because disc geometry is missing", image_id)
+            continue
+
+        vessel_path = vessels_dir / f"{image_id}.png"
+        av_path = av_dir / f"{image_id}.png"
+        if not vessel_path.exists() or not av_path.exists():
+            logger.warning("Skipping %s because vessel or AV mask is missing", image_id)
+            continue
+
+        vessel_mask = np.array(Image.open(vessel_path)) > 0
+        av_mask = np.array(Image.open(av_path))
+        artery_mask, vein_mask = _typed_vessel_masks(vessel_mask, av_mask)
+        for typed_mask, vessel_type in ((artery_mask, "artery"), (vein_mask, "vein")):
+            image_width_records, image_tortuosity_records = _path_records_for_image(
+                image_id=image_id,
+                vessel_mask=typed_mask,
+                vessel_type=vessel_type,
+                disc_center_xy=np.array(
+                    [row["x_disc_center"], row["y_disc_center"]], dtype=float
+                ),
+                inner_circle=inner_circle,
+                outer_circle=outer_circle,
+                disc_radius_px=float(row["disc_radius_px"]),
+                samples_per_connection=samples_per_connection,
+                boundary_tolerance_px=boundary_tolerance_px,
+                tangent_window_px=tangent_window_px,
+                measurement_step_px=measurement_step_px,
+            )
+            width_records.extend(image_width_records)
+            tortuosity_records.extend(image_tortuosity_records)
+
+    df_widths = pd.DataFrame.from_records(
+        width_records,
+        columns=VESSEL_WIDTH_COLUMNS,
+    )
+    df_tortuosities = pd.DataFrame.from_records(
+        tortuosity_records,
+        columns=VESSEL_TORTUOSITY_COLUMNS,
+    )
+    if output_path is not None:
+        df_widths.to_csv(output_path, index=False)
+        logger.info("Vessel path width measurements saved to %s", output_path)
+    if tortuosity_output_path is not None:
+        df_tortuosities.to_csv(tortuosity_output_path, index=False)
+        logger.info("Vessel path tortuosities saved to %s", tortuosity_output_path)
+    return df_widths, df_tortuosities
 
 
 def measure_vessel_widths_between_disc_circle_pair(
@@ -676,88 +841,18 @@ def measure_vessel_widths_between_disc_circle_pair(
     measurement_step_px: float = 0.25,
 ) -> pd.DataFrame:
     """Measure artery and vein widths separately at interior points between two circles."""
-    if not disc_geometry_path.exists():
-        raise FileNotFoundError(f"Disc geometry file not found: {disc_geometry_path}")
-    if not vessels_dir.exists():
-        raise FileNotFoundError(f"Vessels directory not found: {vessels_dir}")
-    if not av_dir.exists():
-        raise FileNotFoundError(f"AV directory not found: {av_dir}")
-
-    df_geometry = pd.read_csv(disc_geometry_path, index_col=0)
-    records: List[dict] = []
-
-    for image_id, row in df_geometry.iterrows():
-        if pd.isna(row["x_disc_center"]) or pd.isna(row["y_disc_center"]) or pd.isna(
-            row["disc_radius_px"]
-        ):
-            logger.warning("Skipping %s because disc geometry is missing", image_id)
-            continue
-
-        vessel_path = vessels_dir / f"{image_id}.png"
-        av_path = av_dir / f"{image_id}.png"
-        if not vessel_path.exists() or not av_path.exists():
-            logger.warning("Skipping %s because vessel or AV mask is missing", image_id)
-            continue
-
-        vessel_mask = np.array(Image.open(vessel_path)) > 0
-        av_mask = np.array(Image.open(av_path))
-        artery_mask, vein_mask = _typed_vessel_masks(vessel_mask, av_mask)
-        image_records: List[dict] = []
-        image_records.extend(
-            _path_records_for_image(
-                image_id=image_id,
-                vessel_mask=artery_mask,
-                vessel_type="artery",
-                disc_center_xy=np.array([row["x_disc_center"], row["y_disc_center"]], dtype=float),
-                inner_circle=inner_circle,
-                outer_circle=outer_circle,
-                disc_radius_px=float(row["disc_radius_px"]),
-                samples_per_connection=samples_per_connection,
-                boundary_tolerance_px=boundary_tolerance_px,
-                tangent_window_px=tangent_window_px,
-                measurement_step_px=measurement_step_px,
-            )
-        )
-        image_records.extend(
-            _path_records_for_image(
-                image_id=image_id,
-                vessel_mask=vein_mask,
-                vessel_type="vein",
-                disc_center_xy=np.array([row["x_disc_center"], row["y_disc_center"]], dtype=float),
-                inner_circle=inner_circle,
-                outer_circle=outer_circle,
-                disc_radius_px=float(row["disc_radius_px"]),
-                samples_per_connection=samples_per_connection,
-                boundary_tolerance_px=boundary_tolerance_px,
-                tangent_window_px=tangent_window_px,
-                measurement_step_px=measurement_step_px,
-            )
-        )
-        records.extend(image_records)
-
-    df_widths = pd.DataFrame.from_records(
-        records,
-        columns=[
-            "image_id",
-            "inner_circle",
-            "outer_circle",
-            "inner_circle_radius_px",
-            "outer_circle_radius_px",
-            "connection_index",
-            "sample_index",
-            "x",
-            "y",
-            "width_px",
-            "x_start",
-            "y_start",
-            "x_end",
-            "y_end",
-            "vessel_type",
-        ],
+    df_widths, _ = measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
+        vessels_dir=vessels_dir,
+        av_dir=av_dir,
+        disc_geometry_path=disc_geometry_path,
+        inner_circle=inner_circle,
+        outer_circle=outer_circle,
+        output_path=output_path,
+        samples_per_connection=samples_per_connection,
+        boundary_tolerance_px=boundary_tolerance_px,
+        tangent_window_px=tangent_window_px,
+        measurement_step_px=measurement_step_px,
     )
-    if output_path is not None:
-        df_widths.to_csv(output_path, index=False)
-        logger.info("Vessel path width measurements saved to %s", output_path)
     return df_widths
 
 
@@ -802,7 +897,9 @@ def revised_vessel_equivalent(
 
     coeff = coeffs[vt]
 
-    values = sorted([float(x) for x in diameters if float(x) > 0.0], reverse=True)[:n_largest]
+    values = sorted([float(x) for x in diameters if float(x) > 0.0], reverse=True)[
+        :n_largest
+    ]
 
     if len(values) < 2:
         raise ValueError("Need at least two valid vessel diameters.")
@@ -841,6 +938,7 @@ def compute_revised_crx_from_widths(
     df_widths: pd.DataFrame,
     n_largest: int = 6,
     return_rounds: bool = False,
+    df_tortuosities: pd.DataFrame | None = None,
 ):
     """Aggregate per-connection mean widths and compute revised CRAE/CRVE.
 
@@ -854,6 +952,11 @@ def compute_revised_crx_from_widths(
     return_rounds:
         If True, also return the intermediate rounds from the revised algorithm
         for each image/vessel_type as a mapping.
+    df_tortuosities:
+        Optional one-row-per-vessel tortuosity table produced by
+        `measure_vessel_widths_and_tortuosities_between_disc_circle_pair`. When
+        provided, the equivalent output includes the mean tortuosity of the
+        selected top-width vessels.
 
     Returns
     -------
@@ -862,6 +965,8 @@ def compute_revised_crx_from_widths(
         `(df_connections, df_equivalents, rounds_map)` when `return_rounds` is True.
         `df_connections` contains the per-connection mean widths and selection flags.
     """
+
+    include_tortuosity = df_tortuosities is not None
 
     cols_conn = [
         "image_id",
@@ -876,6 +981,8 @@ def compute_revised_crx_from_widths(
         "n_samples",
         "selected_for_equivalent",
     ]
+    if include_tortuosity:
+        cols_conn.append("tortuosity")
     cols_equiv = [
         "image_id",
         "metric",
@@ -887,6 +994,8 @@ def compute_revised_crx_from_widths(
         "mean_widths_used_px",
         "equivalent_px",
     ]
+    if include_tortuosity:
+        cols_equiv.append("mean_tortuosity_used")
 
     if df_widths.empty:
         df_conn_empty = pd.DataFrame(columns=cols_conn)
@@ -914,6 +1023,16 @@ def compute_revised_crx_from_widths(
         lambda row: f"{row['vessel_type']}_{int(row['connection_index'])}",
         axis=1,
     )
+    if include_tortuosity:
+        tortuosity_lookup_cols = group_cols + ["tortuosity"]
+        if df_tortuosities.empty:
+            df_conn["tortuosity"] = float("nan")
+        else:
+            df_conn = df_conn.merge(
+                df_tortuosities[tortuosity_lookup_cols],
+                on=group_cols,
+                how="left",
+            )
     df_conn["selected_for_equivalent"] = False
     df_conn = df_conn[cols_conn]
 
@@ -936,9 +1055,13 @@ def compute_revised_crx_from_widths(
             "n_vessels_available": int(len(group)),
             "n_vessels_used": int(len(top)),
             "vessel_ids_used": ";".join(str(value) for value in top["vessel_id"]),
-            "mean_widths_used_px": ";".join(f"{float(value):.6g}" for value in diameters),
+            "mean_widths_used_px": ";".join(
+                f"{float(value):.6g}" for value in diameters
+            ),
             "equivalent_px": float("nan"),
         }
+        if include_tortuosity:
+            result["mean_tortuosity_used"] = float(top["tortuosity"].mean())
         try:
             if return_rounds:
                 eq, rounds = revised_vessel_equivalent(
@@ -949,7 +1072,9 @@ def compute_revised_crx_from_widths(
                 )
                 rounds_map[(image_id, vessel_type)] = rounds
             else:
-                eq = revised_vessel_equivalent(diameters, vessel_type, n_largest=n_largest)
+                eq = revised_vessel_equivalent(
+                    diameters, vessel_type, n_largest=n_largest
+                )
             result["equivalent_px"] = float(eq)
         except ValueError:
             pass
