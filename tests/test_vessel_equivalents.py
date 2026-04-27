@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from vascx_models.vessel_widths import (
+    VESSEL_WIDTH_COLUMNS,
     compute_revised_crx_from_widths,
     select_vessel_width_measurements_for_equivalents,
 )
@@ -31,6 +32,21 @@ def _vessel_width_record(
         "x_end": 1.0,
         "y_end": 1.0,
         "vessel_type": vessel_type,
+        "width_method": "mask",
+        "normal_x": 1.0,
+        "normal_y": 0.0,
+        "profile_channel": None,
+        "profile_left_t": np.nan,
+        "profile_right_t": np.nan,
+        "profile_trough_t": np.nan,
+        "profile_trough_value": np.nan,
+        "profile_background_value": np.nan,
+        "profile_contrast": np.nan,
+        "profile_threshold": np.nan,
+        "profile_confidence": np.nan,
+        "mask_width_px": width_px,
+        "measurement_valid": True,
+        "measurement_failure_reason": None,
     }
 
 
@@ -124,7 +140,9 @@ def test_compute_revised_crx_from_widths_limits_selection_to_six_largest() -> No
         "artery_8;artery_7;artery_6;artery_5;artery_4;artery_3"
     )
     selected_connection_ids = set(
-        df_connections.loc[df_connections["selected_for_equivalent"], "connection_index"]
+        df_connections.loc[
+            df_connections["selected_for_equivalent"], "connection_index"
+        ]
     )
     assert selected_connection_ids == {
         3,
@@ -174,7 +192,9 @@ def test_compute_revised_crx_from_widths_aggregates_selected_tortuosity() -> Non
     assert df_equivalents.iloc[0]["mean_tortuosity_used"] == pytest.approx(1.55)
 
 
-def test_compute_revised_crx_from_widths_reports_single_vessel_without_equivalent() -> None:
+def test_compute_revised_crx_from_widths_reports_single_vessel_without_equivalent() -> (
+    None
+):
     df_widths = pd.DataFrame.from_records(
         [
             _vessel_width_record(1, 1, 12.0, "vein"),
@@ -198,25 +218,7 @@ def test_compute_revised_crx_from_widths_reports_single_vessel_without_equivalen
 
 
 def test_compute_revised_crx_from_widths_preserves_empty_output_schema() -> None:
-    empty_widths = pd.DataFrame(
-        columns=[
-            "image_id",
-            "inner_circle",
-            "outer_circle",
-            "inner_circle_radius_px",
-            "outer_circle_radius_px",
-            "connection_index",
-            "sample_index",
-            "x",
-            "y",
-            "width_px",
-            "x_start",
-            "y_start",
-            "x_end",
-            "y_end",
-            "vessel_type",
-        ]
-    )
+    empty_widths = pd.DataFrame(columns=VESSEL_WIDTH_COLUMNS)
 
     df_connections, df_equivalents = compute_revised_crx_from_widths(empty_widths)
     selected = select_vessel_width_measurements_for_equivalents(

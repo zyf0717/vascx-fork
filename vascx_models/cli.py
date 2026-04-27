@@ -7,7 +7,6 @@ from pathlib import Path
 
 import click
 import pandas as pd
-
 from rtnls_fundusprep.cli import _run_preprocessing
 
 from .config import load_app_config
@@ -24,13 +23,13 @@ from .inference import (
     run_segmentation_disc,
     run_segmentation_vessels_and_av,
 )
+from .utils import batch_create_overlays
 from .vessel_widths import (
     compute_revised_crx_from_widths,
     measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
     resolve_vessel_width_circle_pair,
     select_vessel_width_measurements_for_equivalents,
 )
-from .utils import batch_create_overlays
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +94,13 @@ def _copy_pipeline_output_for_vessel_metrics(
     )
 
 
+def _resolve_vessel_width_rgb_dir(output_path: Path, image_source: str) -> Path:
+    candidate = Path(image_source).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return output_path / candidate
+
+
 def _compute_and_save_vessel_metrics(
     vessels_path: Path,
     av_path: Path,
@@ -112,28 +118,41 @@ def _compute_and_save_vessel_metrics(
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
+    rgb_dir = None
+    if app_config.vessel_widths.method == "profile":
+        rgb_dir = _resolve_vessel_width_rgb_dir(
+            output_path,
+            app_config.vessel_widths.profile.image_source,
+        )
+
     vessel_widths_path = output_path / "vessel_widths.csv"
     vessel_tortuosities_path = output_path / "vessel_tortuosities.csv"
     vessel_equivalents_path = output_path / "vessel_equivalents.csv"
 
     logger.info(
-        "Measuring vessel metrics between %s and %s with %d samples per connection",
+        "Measuring vessel metrics between %s and %s with %d samples per connection using %s",
         inner_circle.name,
         outer_circle.name,
         app_config.vessel_widths.samples_per_connection,
+        app_config.vessel_widths.method,
     )
-    df_vessel_widths, df_vessel_tortuosities = (
-        measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
-            vessels_dir=vessels_path,
-            av_dir=av_path,
-            disc_geometry_path=disc_geometry_path,
-            inner_circle=inner_circle,
-            outer_circle=outer_circle,
-            output_path=vessel_widths_path,
-            tortuosity_output_path=vessel_tortuosities_path,
-            samples_per_connection=app_config.vessel_widths.samples_per_connection,
+    try:
+        df_vessel_widths, df_vessel_tortuosities = (
+            measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
+                vessels_dir=vessels_path,
+                av_dir=av_path,
+                disc_geometry_path=disc_geometry_path,
+                inner_circle=inner_circle,
+                outer_circle=outer_circle,
+                output_path=vessel_widths_path,
+                tortuosity_output_path=vessel_tortuosities_path,
+                samples_per_connection=app_config.vessel_widths.samples_per_connection,
+                width_config=app_config.vessel_widths,
+                rgb_dir=rgb_dir,
+            )
         )
-    )
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
     df_connection_widths, df_vessel_equivalents = compute_revised_crx_from_widths(
         df_vessel_widths,
         df_tortuosities=df_vessel_tortuosities,
@@ -183,7 +202,9 @@ def vessel_metrics(
     else:
         output_path = output_path.resolve()
     if source_output_path == output_path:
-        raise click.ClickException("OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH")
+        raise click.ClickException(
+            "OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH"
+        )
     try:
         output_path.relative_to(source_output_path)
     except ValueError:
@@ -192,9 +213,11 @@ def vessel_metrics(
         raise click.ClickException("OUTPUT_PATH must not be inside SOURCE_OUTPUT_PATH")
 
     _ensure_empty_or_new_output_dir(output_path)
-    vessels_path, av_path, disc_geometry_path = _copy_pipeline_output_for_vessel_metrics(
-        source_output_path=source_output_path,
-        output_path=output_path,
+    vessels_path, av_path, disc_geometry_path = (
+        _copy_pipeline_output_for_vessel_metrics(
+            source_output_path=source_output_path,
+            output_path=output_path,
+        )
     )
     _compute_and_save_vessel_metrics(
         vessels_path=vessels_path,
@@ -435,9 +458,11 @@ def run(
             output_path=output_path,
             config_path=config_path,
         )
-        df_selected_equivalent_widths = select_vessel_width_measurements_for_equivalents(
-            df_vessel_widths,
-            df_connection_widths,
+        df_selected_equivalent_widths = (
+            select_vessel_width_measurements_for_equivalents(
+                df_vessel_widths,
+                df_connection_widths,
+            )
         )
 
     # Step 6: Run fovea detection if requested

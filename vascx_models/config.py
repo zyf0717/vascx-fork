@@ -6,7 +6,6 @@ from typing import Iterable, Mapping
 
 import yaml
 
-
 DEFAULT_CONFIG_NAME = "config.yaml"
 
 
@@ -60,6 +59,35 @@ class VesselWidthConfig:
     inner_circle: str | None = None
     outer_circle: str | None = None
     samples_per_connection: int = 5
+    method: str = "mask"
+    pvbm_mask: "PVBMMaskWidthConfig" = field(
+        default_factory=lambda: PVBMMaskWidthConfig()
+    )
+    profile: "ProfileWidthConfig" = field(default_factory=lambda: ProfileWidthConfig())
+
+
+@dataclass(frozen=True)
+class PVBMMaskWidthConfig:
+    direction_lag_px: float = 6.0
+    max_asymmetry_px: float = 1.0
+
+
+@dataclass(frozen=True)
+class ProfileWidthConfig:
+    image_source: str = "preprocessed_rgb"
+    channel: str = "green"
+    half_length_px: float = 20.0
+    sample_step_px: float = 0.25
+    smoothing_sigma_px: float = 1.0
+    boundary_method: str = "half_depth"
+    threshold_alpha: float = 0.5
+    min_contrast: float = 0.05
+    min_width_px: float = 1.0
+    max_width_px: float = 80.0
+    use_mask_guardrail: bool = True
+    mask_guardrail_min_ratio: float = 0.4
+    mask_guardrail_max_ratio: float = 2.5
+    fallback_to_mask: bool = False
 
 
 @dataclass(frozen=True)
@@ -164,9 +192,7 @@ def _build_overlay_layers(raw_layers: Mapping[str, object]) -> OverlayLayers:
         if raw_key not in alias_map:
             raise ValueError(f"Unsupported overlay layer '{raw_key}'")
         normalized_key = alias_map[raw_key]
-        values[normalized_key] = _coerce_bool(
-            raw_value, f"overlay.layers.{raw_key}"
-        )
+        values[normalized_key] = _coerce_bool(raw_value, f"overlay.layers.{raw_key}")
     return OverlayLayers(**values)
 
 
@@ -216,13 +242,17 @@ def _build_overlay_circles(raw_circles: object) -> tuple[OverlayCircle, ...]:
 
         circle_name = _coerce_circle_name(raw_circle["name"], f"{field_name}.name")
         if circle_name in seen_names:
-            raise ValueError(f"Duplicate circle name '{circle_name}' in overlay.circles")
+            raise ValueError(
+                f"Duplicate circle name '{circle_name}' in overlay.circles"
+            )
 
         raw_color = raw_circle.get("color", raw_circle.get("colour", (0, 0, 0)))
         circles.append(
             OverlayCircle(
                 name=circle_name,
-                diameter=_coerce_positive_float(raw_circle["diameter"], f"{field_name}.diameter"),
+                diameter=_coerce_positive_float(
+                    raw_circle["diameter"], f"{field_name}.diameter"
+                ),
                 color=_parse_rgb(raw_color, f"{field_name}.color"),
             )
         )
@@ -231,15 +261,32 @@ def _build_overlay_circles(raw_circles: object) -> tuple[OverlayCircle, ...]:
     return tuple(circles)
 
 
-def _build_vessel_width_config(raw_vessel_widths: Mapping[str, object]) -> VesselWidthConfig:
+def _build_vessel_width_config(
+    raw_vessel_widths: Mapping[str, object],
+) -> VesselWidthConfig:
     unsupported_keys = set(raw_vessel_widths) - {
         "inner_circle",
         "outer_circle",
         "samples_per_connection",
+        "method",
+        "pvbm_mask",
+        "profile",
     }
     if unsupported_keys:
         unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
         raise ValueError(f"Unsupported keys in 'vessel_widths': {unsupported}")
+
+    pvbm_mask_raw = raw_vessel_widths.get("pvbm_mask", {})
+    if pvbm_mask_raw is None:
+        pvbm_mask_raw = {}
+    if not isinstance(pvbm_mask_raw, Mapping):
+        raise ValueError("'vessel_widths.pvbm_mask' must be a mapping")
+
+    profile_raw = raw_vessel_widths.get("profile", {})
+    if profile_raw is None:
+        profile_raw = {}
+    if not isinstance(profile_raw, Mapping):
+        raise ValueError("'vessel_widths.profile' must be a mapping")
 
     return VesselWidthConfig(
         inner_circle=_coerce_optional_string(
@@ -251,6 +298,141 @@ def _build_vessel_width_config(raw_vessel_widths: Mapping[str, object]) -> Vesse
         samples_per_connection=_coerce_positive_int(
             raw_vessel_widths.get("samples_per_connection", 5),
             "vessel_widths.samples_per_connection",
+        ),
+        method=_coerce_choice(
+            raw_vessel_widths.get("method", "mask"),
+            "vessel_widths.method",
+            {"mask", "pvbm_mask", "profile"},
+        ),
+        pvbm_mask=_build_pvbm_mask_width_config(pvbm_mask_raw),
+        profile=_build_profile_width_config(profile_raw),
+    )
+
+
+def _build_pvbm_mask_width_config(
+    raw_pvbm_mask: Mapping[str, object],
+) -> PVBMMaskWidthConfig:
+    unsupported_keys = set(raw_pvbm_mask) - {
+        "direction_lag_px",
+        "max_asymmetry_px",
+    }
+    if unsupported_keys:
+        unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
+        raise ValueError(
+            f"Unsupported keys in 'vessel_widths.pvbm_mask': {unsupported}"
+        )
+
+    return PVBMMaskWidthConfig(
+        direction_lag_px=_coerce_positive_float(
+            raw_pvbm_mask.get("direction_lag_px", 6.0),
+            "vessel_widths.pvbm_mask.direction_lag_px",
+        ),
+        max_asymmetry_px=_coerce_non_negative_float(
+            raw_pvbm_mask.get("max_asymmetry_px", 1.0),
+            "vessel_widths.pvbm_mask.max_asymmetry_px",
+        ),
+    )
+
+
+def _build_profile_width_config(
+    raw_profile: Mapping[str, object],
+) -> ProfileWidthConfig:
+    unsupported_keys = set(raw_profile) - {
+        "image_source",
+        "channel",
+        "half_length_px",
+        "sample_step_px",
+        "smoothing_sigma_px",
+        "boundary_method",
+        "threshold_alpha",
+        "min_contrast",
+        "min_width_px",
+        "max_width_px",
+        "use_mask_guardrail",
+        "mask_guardrail_min_ratio",
+        "mask_guardrail_max_ratio",
+        "fallback_to_mask",
+    }
+    if unsupported_keys:
+        unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
+        raise ValueError(f"Unsupported keys in 'vessel_widths.profile': {unsupported}")
+
+    min_width_px = _coerce_positive_float(
+        raw_profile.get("min_width_px", 1.0),
+        "vessel_widths.profile.min_width_px",
+    )
+    max_width_px = _coerce_positive_float(
+        raw_profile.get("max_width_px", 80.0),
+        "vessel_widths.profile.max_width_px",
+    )
+    if max_width_px < min_width_px:
+        raise ValueError(
+            "'vessel_widths.profile.max_width_px' must be greater than or equal to "
+            "'vessel_widths.profile.min_width_px'"
+        )
+
+    min_ratio = _coerce_positive_float(
+        raw_profile.get("mask_guardrail_min_ratio", 0.4),
+        "vessel_widths.profile.mask_guardrail_min_ratio",
+    )
+    max_ratio = _coerce_positive_float(
+        raw_profile.get("mask_guardrail_max_ratio", 2.5),
+        "vessel_widths.profile.mask_guardrail_max_ratio",
+    )
+    if max_ratio < min_ratio:
+        raise ValueError(
+            "'vessel_widths.profile.mask_guardrail_max_ratio' must be greater than or "
+            "equal to 'vessel_widths.profile.mask_guardrail_min_ratio'"
+        )
+
+    return ProfileWidthConfig(
+        image_source=_coerce_required_string(
+            raw_profile.get("image_source", "preprocessed_rgb"),
+            "vessel_widths.profile.image_source",
+        ),
+        channel=_coerce_choice(
+            raw_profile.get("channel", "green"),
+            "vessel_widths.profile.channel",
+            {"red", "green", "blue"},
+        ),
+        half_length_px=_coerce_positive_float(
+            raw_profile.get("half_length_px", 20.0),
+            "vessel_widths.profile.half_length_px",
+        ),
+        sample_step_px=_coerce_positive_float(
+            raw_profile.get("sample_step_px", 0.25),
+            "vessel_widths.profile.sample_step_px",
+        ),
+        smoothing_sigma_px=_coerce_non_negative_float(
+            raw_profile.get("smoothing_sigma_px", 1.0),
+            "vessel_widths.profile.smoothing_sigma_px",
+        ),
+        boundary_method=_coerce_choice(
+            raw_profile.get("boundary_method", "half_depth"),
+            "vessel_widths.profile.boundary_method",
+            {"half_depth"},
+        ),
+        threshold_alpha=_coerce_float_in_range(
+            raw_profile.get("threshold_alpha", 0.5),
+            "vessel_widths.profile.threshold_alpha",
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        min_contrast=_coerce_non_negative_float(
+            raw_profile.get("min_contrast", 0.05),
+            "vessel_widths.profile.min_contrast",
+        ),
+        min_width_px=min_width_px,
+        max_width_px=max_width_px,
+        use_mask_guardrail=_coerce_bool(
+            raw_profile.get("use_mask_guardrail", True),
+            "vessel_widths.profile.use_mask_guardrail",
+        ),
+        mask_guardrail_min_ratio=min_ratio,
+        mask_guardrail_max_ratio=max_ratio,
+        fallback_to_mask=_coerce_bool(
+            raw_profile.get("fallback_to_mask", False),
+            "vessel_widths.profile.fallback_to_mask",
         ),
     )
 
@@ -267,6 +449,25 @@ def _coerce_positive_float(value: object, field_name: str) -> float:
     raise ValueError(f"'{field_name}' must be a positive number")
 
 
+def _coerce_non_negative_float(value: object, field_name: str) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    raise ValueError(f"'{field_name}' must be a non-negative number")
+
+
+def _coerce_float_in_range(
+    value: object,
+    field_name: str,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric_value = float(value)
+        if minimum <= numeric_value <= maximum:
+            return numeric_value
+    raise ValueError(f"'{field_name}' must be a number between {minimum} and {maximum}")
+
+
 def _coerce_positive_int(value: object, field_name: str) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
@@ -279,6 +480,26 @@ def _coerce_optional_string(value: object, field_name: str) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     raise ValueError(f"'{field_name}' must be a non-empty string or null")
+
+
+def _coerce_required_string(value: object, field_name: str) -> str:
+    normalized = _coerce_optional_string(value, field_name)
+    if normalized is None:
+        raise ValueError(f"'{field_name}' must be a non-empty string")
+    return normalized
+
+
+def _coerce_choice(
+    value: object,
+    field_name: str,
+    allowed_values: set[str],
+) -> str:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized in allowed_values:
+            return normalized
+    allowed = ", ".join(sorted(allowed_values))
+    raise ValueError(f"'{field_name}' must be one of: {allowed}")
 
 
 def _coerce_circle_name(value: object, field_name: str) -> str:

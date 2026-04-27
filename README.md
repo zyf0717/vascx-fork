@@ -115,11 +115,36 @@ vessel_widths:
   inner_circle: "2r"
   outer_circle: "3r"
   samples_per_connection: 5
+  method: "mask"
+  pvbm_mask:
+    direction_lag_px: 6.0
+    max_asymmetry_px: 1.0
+  profile:
+    image_source: "preprocessed_rgb"
+    channel: "green"
+    half_length_px: 20.0
+    sample_step_px: 0.25
+    smoothing_sigma_px: 1.0
+    boundary_method: "half_depth"
+    threshold_alpha: 0.5
+    min_contrast: 0.05
+    min_width_px: 1.0
+    max_width_px: 80.0
+    use_mask_guardrail: true
+    mask_guardrail_min_ratio: 0.4
+    mask_guardrail_max_ratio: 2.5
+    fallback_to_mask: false
 ```
 
 Vessel widths are sampled between the configured inner and outer disc circles.
 Each retained vessel connection receives `samples_per_connection` interior
-measurements. Widths are measured perpendicular to the local skeleton tangent.
+measurements. `vessel_widths.method` selects the backend:
+
+- `mask`: existing subpixel mask-boundary method, unchanged and still the default.
+- `pvbm_mask`: integer/grid mask-width baseline using the local path direction and a perpendicular normal.
+- `profile`: green-channel image-profile-derived width estimation. By default this reads from `preprocessed_rgb/`; if those RGB images are unavailable the run fails clearly unless `vessel_widths.profile.fallback_to_mask` is enabled.
+
+The `profile` backend uses the mask width only as a guardrail/reference. CRAE/CRVE aggregation continues to use the per-sample `width_px` values emitted by the active backend.
 
 Fork handling is intentionally trunk-focused:
 
@@ -154,10 +179,18 @@ Key CSV outputs:
 - `fovea.csv`: detected fovea coordinates.
 - `disc_geometry.csv`: optic disc center and radius used for circle generation.
 - `vessel_widths.csv`: per-sample vessel width measurements, including measurement
-  endpoints (`x_start`, `y_start`, `x_end`, `y_end`) for overlay rendering.
+  endpoints (`x_start`, `y_start`, `x_end`, `y_end`) for overlay rendering, plus
+  method/provenance fields such as `width_method`, `normal_x`, `normal_y`,
+  `mask_width_px`, `measurement_valid`, and `measurement_failure_reason`.
 - `vessel_tortuosities.csv`: per-vessel path tortuosity, computed as skeleton
   path length divided by endpoint chord length for each retained vessel trace.
 - `vessel_equivalents.csv`: CRAE/CRVE summary per image and vessel type.
+
+Additional `vessel_widths.csv` columns include:
+
+- `profile_channel`, `profile_left_t`, `profile_right_t`, `profile_trough_t`
+- `profile_trough_value`, `profile_background_value`, `profile_contrast`
+- `profile_threshold`, `profile_confidence`
 
 `vessel_equivalents.csv` includes:
 

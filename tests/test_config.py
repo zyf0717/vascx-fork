@@ -108,9 +108,54 @@ def test_load_app_config_accepts_vessel_width_sampling_options(tmp_path: Path) -
     assert app_config.vessel_widths.inner_circle == "2r"
     assert app_config.vessel_widths.outer_circle == "3r"
     assert app_config.vessel_widths.samples_per_connection == 4
+    assert app_config.vessel_widths.method == "mask"
 
 
-def test_load_app_config_rejects_invalid_vessel_width_samples_per_connection(tmp_path: Path) -> None:
+def test_load_app_config_accepts_profile_width_options(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  method: profile",
+                "  profile:",
+                "    image_source: custom_rgb",
+                "    channel: blue",
+                "    half_length_px: 18.0",
+                "    sample_step_px: 0.5",
+                "    smoothing_sigma_px: 0.0",
+                "    boundary_method: half_depth",
+                "    threshold_alpha: 0.4",
+                "    min_contrast: 0.03",
+                "    min_width_px: 2.0",
+                "    max_width_px: 50.0",
+                "    use_mask_guardrail: false",
+                "    mask_guardrail_min_ratio: 0.5",
+                "    mask_guardrail_max_ratio: 2.0",
+                "    fallback_to_mask: true",
+                "  pvbm_mask:",
+                "    direction_lag_px: 7.0",
+                "    max_asymmetry_px: 1.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app_config = load_app_config(config_path)
+
+    assert app_config.vessel_widths.method == "profile"
+    assert app_config.vessel_widths.profile.image_source == "custom_rgb"
+    assert app_config.vessel_widths.profile.channel == "blue"
+    assert app_config.vessel_widths.profile.sample_step_px == 0.5
+    assert app_config.vessel_widths.profile.use_mask_guardrail is False
+    assert app_config.vessel_widths.profile.fallback_to_mask is True
+    assert app_config.vessel_widths.pvbm_mask.direction_lag_px == 7.0
+    assert app_config.vessel_widths.pvbm_mask.max_asymmetry_px == 1.5
+
+
+def test_load_app_config_rejects_invalid_vessel_width_samples_per_connection(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -123,4 +168,20 @@ def test_load_app_config_rejects_invalid_vessel_width_samples_per_connection(tmp
     )
 
     with pytest.raises(ValueError, match="vessel_widths.samples_per_connection"):
+        load_app_config(config_path)
+
+
+def test_load_app_config_rejects_invalid_vessel_width_method(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  method: unsupported",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="vessel_widths.method"):
         load_app_config(config_path)

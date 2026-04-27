@@ -24,3 +24,22 @@ vessel_widths:
   inner_circle: "2r"
   outer_circle: "3r"
   samples_per_connection: 5
+  method: "mask"
+  pvbm_mask:
+    direction_lag_px: 6.0
+    max_asymmetry_px: 1.0
+  profile:
+    image_source: "preprocessed_rgb"
+    channel: "green"
+    half_length_px: 20.0
+    sample_step_px: 0.25
+    smoothing_sigma_px: 1.0
+    boundary_method: "half_depth"
+    threshold_alpha: 0.5
+    min_contrast: 0.05
+    min_width_px: 1.0
+    max_width_px: 80.0
+    use_mask_guardrail: true
+    mask_guardrail_min_ratio: 0.4
+    mask_guardrail_max_ratio: 2.5
+    fallback_to_mask: false

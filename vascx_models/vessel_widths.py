@@ -7,19 +7,20 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from .config import OverlayCircle
+from .config import OverlayCircle, VesselWidthConfig
+from .profile_widths import measure_profile_width
+from .pvbm_widths import measure_pvbm_mask_width
 from .vessel_paths import (
     interpolate_path_point,
     path_cumulative_lengths,
     skeletonize,
     trace_vessel_paths_between_disc_circle_pair,
 )
-from .vessel_tortuosities import (
-    VESSEL_TORTUOSITY_COLUMNS,
-    vessel_tortuosity_record,
-)
+from .vessel_tortuosities import VESSEL_TORTUOSITY_COLUMNS, vessel_tortuosity_record
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PROFILE_DIRECTION_LAG_PX = 6.0
 
 VESSEL_WIDTH_COLUMNS = [
     "image_id",
@@ -37,7 +38,59 @@ VESSEL_WIDTH_COLUMNS = [
     "x_end",
     "y_end",
     "vessel_type",
+    "width_method",
+    "normal_x",
+    "normal_y",
+    "profile_channel",
+    "profile_left_t",
+    "profile_right_t",
+    "profile_trough_t",
+    "profile_trough_value",
+    "profile_background_value",
+    "profile_contrast",
+    "profile_threshold",
+    "profile_confidence",
+    "mask_width_px",
+    "measurement_valid",
+    "measurement_failure_reason",
 ]
+
+
+def _nan_point() -> np.ndarray:
+    return np.array([float("nan"), float("nan")], dtype=float)
+
+
+def _base_measurement_result(width_method: str = "mask") -> dict[str, object]:
+    return {
+        "width_method": width_method,
+        "width_px": float("nan"),
+        "x_start": float("nan"),
+        "y_start": float("nan"),
+        "x_end": float("nan"),
+        "y_end": float("nan"),
+        "normal_x": float("nan"),
+        "normal_y": float("nan"),
+        "profile_channel": None,
+        "profile_left_t": float("nan"),
+        "profile_right_t": float("nan"),
+        "profile_trough_t": float("nan"),
+        "profile_trough_value": float("nan"),
+        "profile_background_value": float("nan"),
+        "profile_contrast": float("nan"),
+        "profile_threshold": float("nan"),
+        "profile_confidence": float("nan"),
+        "mask_width_px": float("nan"),
+        "measurement_valid": False,
+        "measurement_failure_reason": None,
+    }
+
+
+def _normalize_measurement_result(
+    measurement: dict[str, object],
+) -> dict[str, object]:
+    normalized = _base_measurement_result(str(measurement.get("width_method", "mask")))
+    normalized.update(measurement)
+    return normalized
 
 
 def _local_skeleton_points(
@@ -76,6 +129,36 @@ def _estimate_tangent(points_xy: np.ndarray) -> Optional[np.ndarray]:
     if norm == 0.0:
         return None
     return tangent / norm
+
+
+def _estimate_path_tangent(
+    path_xy: np.ndarray,
+    cumulative_lengths: np.ndarray,
+    target_length: float,
+    lag_px: float,
+) -> Optional[np.ndarray]:
+    if len(path_xy) < 2 or len(cumulative_lengths) < 2:
+        return None
+
+    total_length = float(cumulative_lengths[-1])
+    if total_length <= 0.0:
+        return None
+
+    lower_length = max(0.0, float(target_length - lag_px))
+    upper_length = min(total_length, float(target_length + lag_px))
+    if upper_length <= lower_length:
+        lower_length = 0.0
+        upper_length = total_length
+    if upper_length <= lower_length:
+        return None
+
+    lower_point = interpolate_path_point(path_xy, cumulative_lengths, lower_length)
+    upper_point = interpolate_path_point(path_xy, cumulative_lengths, upper_length)
+    tangent_xy = upper_point - lower_point
+    norm = float(np.linalg.norm(tangent_xy))
+    if norm == 0.0:
+        return None
+    return tangent_xy / norm
 
 
 def _sample_mask(mask: np.ndarray, point_xy: np.ndarray) -> float:
@@ -142,28 +225,73 @@ def _boundary_point(
     return center_xy + direction_xy * distance_px
 
 
+def _normal_from_tangent(tangent_xy: np.ndarray) -> Optional[np.ndarray]:
+    normal_xy = np.array([-tangent_xy[1], tangent_xy[0]], dtype=float)
+    norm = float(np.linalg.norm(normal_xy))
+    if norm == 0.0:
+        return None
+    return normal_xy / norm
+
+
 def _measure_width_along_normal(
     vessel_mask: np.ndarray,
     center_xy: np.ndarray,
     tangent_xy: np.ndarray,
     step_px: float,
 ) -> tuple[float, np.ndarray, np.ndarray]:
-    normal_xy = np.array([-tangent_xy[1], tangent_xy[0]], dtype=float)
-    norm = float(np.linalg.norm(normal_xy))
-    if norm == 0.0:
-        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+    normal_xy = _normal_from_tangent(tangent_xy)
+    if normal_xy is None:
+        nan_point = _nan_point()
         return float("nan"), nan_point, nan_point
-    normal_xy /= norm
 
     positive = _trace_boundary_distance(vessel_mask, center_xy, normal_xy, step_px)
     negative = _trace_boundary_distance(vessel_mask, center_xy, -normal_xy, step_px)
     if np.isnan(positive) or np.isnan(negative):
-        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+        nan_point = _nan_point()
         return float("nan"), nan_point, nan_point
 
     start_xy = _boundary_point(center_xy, -normal_xy, negative)
     end_xy = _boundary_point(center_xy, normal_xy, positive)
     return positive + negative, start_xy, end_xy
+
+
+def _measure_mask_width_from_tangent(
+    vessel_mask: np.ndarray,
+    center_xy: np.ndarray,
+    tangent_xy: np.ndarray,
+    step_px: float,
+    width_method: str = "mask",
+) -> dict[str, object]:
+    measurement = _base_measurement_result(width_method)
+    normal_xy = _normal_from_tangent(tangent_xy)
+    if normal_xy is None:
+        measurement["measurement_failure_reason"] = "normal_unavailable"
+        return measurement
+
+    measurement["normal_x"] = float(normal_xy[0])
+    measurement["normal_y"] = float(normal_xy[1])
+    positive = _trace_boundary_distance(vessel_mask, center_xy, normal_xy, step_px)
+    negative = _trace_boundary_distance(vessel_mask, center_xy, -normal_xy, step_px)
+    if np.isnan(positive) or np.isnan(negative):
+        measurement["measurement_failure_reason"] = "mask_boundary_not_found"
+        return measurement
+
+    start_xy = _boundary_point(center_xy, -normal_xy, negative)
+    end_xy = _boundary_point(center_xy, normal_xy, positive)
+    width_px = positive + negative
+    measurement.update(
+        {
+            "width_px": float(width_px),
+            "x_start": float(start_xy[0]),
+            "y_start": float(start_xy[1]),
+            "x_end": float(end_xy[0]),
+            "y_end": float(end_xy[1]),
+            "mask_width_px": float(width_px),
+            "measurement_valid": True,
+            "measurement_failure_reason": None,
+        }
+    )
+    return measurement
 
 
 def measure_vessel_width_at_coordinate(
@@ -178,14 +306,149 @@ def measure_vessel_width_at_coordinate(
     local_points = _local_skeleton_points(skeleton, point_xy, tangent_window_px)
     tangent_xy = _estimate_tangent(local_points)
     if tangent_xy is None:
-        nan_point = np.array([float("nan"), float("nan")], dtype=float)
+        nan_point = _nan_point()
         return float("nan"), nan_point, nan_point
 
-    return _measure_width_along_normal(
+    measurement = _measure_mask_width_from_tangent(
         vessel_mask=vessel_mask,
         center_xy=point_xy,
         tangent_xy=tangent_xy,
         step_px=measurement_step_px,
+    )
+    if not bool(measurement["measurement_valid"]):
+        nan_point = _nan_point()
+        return float("nan"), nan_point, nan_point
+
+    start_xy = np.array(
+        [float(measurement["x_start"]), float(measurement["y_start"])], dtype=float
+    )
+    end_xy = np.array(
+        [float(measurement["x_end"]), float(measurement["y_end"])], dtype=float
+    )
+    return float(measurement["width_px"]), start_xy, end_xy
+
+
+def _channel_index(channel_name: str) -> int:
+    channel_indices = {"red": 0, "green": 1, "blue": 2}
+    return channel_indices[channel_name]
+
+
+def _load_profile_channel_image(
+    image_path: Path,
+    channel_name: str,
+) -> np.ndarray:
+    rgb_image = np.asarray(Image.open(image_path), dtype=np.float32)
+    if rgb_image.ndim != 3 or rgb_image.shape[2] < 3:
+        raise ValueError(
+            f"Profile width measurement requires an RGB image: {image_path}"
+        )
+    return rgb_image[:, :, _channel_index(channel_name)] / 255.0
+
+
+def _measure_sample_width(
+    vessel_mask: np.ndarray,
+    center_xy: np.ndarray,
+    vessel_path_xy: np.ndarray,
+    cumulative_lengths: np.ndarray,
+    target_length: float,
+    width_config: VesselWidthConfig,
+    skeleton: np.ndarray,
+    tangent_window_px: float,
+    measurement_step_px: float,
+    profile_channel_image: np.ndarray | None,
+) -> dict[str, object]:
+    if width_config.method == "mask":
+        width_px, start_xy, end_xy = measure_vessel_width_at_coordinate(
+            vessel_mask=vessel_mask,
+            point_xy=center_xy,
+            skeleton=skeleton,
+            tangent_window_px=tangent_window_px,
+            measurement_step_px=measurement_step_px,
+        )
+        if np.isnan(width_px):
+            measurement = _base_measurement_result("mask")
+            measurement["measurement_failure_reason"] = "mask_measurement_failed"
+            return measurement
+        normal_xy = end_xy - start_xy
+        norm = float(np.linalg.norm(normal_xy))
+        if norm > 0.0:
+            normal_xy = normal_xy / norm
+        else:
+            normal_xy = _nan_point()
+        measurement = _base_measurement_result("mask")
+        measurement.update(
+            {
+                "width_px": float(width_px),
+                "x_start": float(start_xy[0]),
+                "y_start": float(start_xy[1]),
+                "x_end": float(end_xy[0]),
+                "y_end": float(end_xy[1]),
+                "normal_x": float(normal_xy[0]),
+                "normal_y": float(normal_xy[1]),
+                "mask_width_px": float(width_px),
+                "measurement_valid": True,
+            }
+        )
+        return measurement
+
+    lag_px = (
+        width_config.pvbm_mask.direction_lag_px
+        if width_config.method == "pvbm_mask"
+        else DEFAULT_PROFILE_DIRECTION_LAG_PX
+    )
+    tangent_xy = _estimate_path_tangent(
+        vessel_path_xy,
+        cumulative_lengths,
+        target_length,
+        lag_px=lag_px,
+    )
+    if tangent_xy is None:
+        measurement = _base_measurement_result(width_config.method)
+        measurement["measurement_failure_reason"] = "path_tangent_unavailable"
+        return measurement
+
+    if width_config.method == "pvbm_mask":
+        return _normalize_measurement_result(
+            measure_pvbm_mask_width(
+                vessel_mask=vessel_mask,
+                center_xy=center_xy,
+                tangent_xy=tangent_xy,
+                max_asymmetry_px=width_config.pvbm_mask.max_asymmetry_px,
+            )
+        )
+
+    if width_config.method != "profile":
+        raise ValueError(f"Unsupported vessel width method: {width_config.method}")
+
+    mask_measurement = _measure_mask_width_from_tangent(
+        vessel_mask=vessel_mask,
+        center_xy=center_xy,
+        tangent_xy=tangent_xy,
+        step_px=measurement_step_px,
+        width_method="mask",
+    )
+    if profile_channel_image is None:
+        return _normalize_measurement_result(mask_measurement)
+
+    return _normalize_measurement_result(
+        measure_profile_width(
+            channel_image=profile_channel_image,
+            vessel_mask=vessel_mask,
+            center_xy=center_xy,
+            tangent_xy=tangent_xy,
+            channel_name=width_config.profile.channel,
+            half_length_px=width_config.profile.half_length_px,
+            sample_step_px=width_config.profile.sample_step_px,
+            smoothing_sigma_px=width_config.profile.smoothing_sigma_px,
+            threshold_alpha=width_config.profile.threshold_alpha,
+            min_contrast=width_config.profile.min_contrast,
+            min_width_px=width_config.profile.min_width_px,
+            max_width_px=width_config.profile.max_width_px,
+            use_mask_guardrail=width_config.profile.use_mask_guardrail,
+            mask_guardrail_min_ratio=width_config.profile.mask_guardrail_min_ratio,
+            mask_guardrail_max_ratio=width_config.profile.mask_guardrail_max_ratio,
+            mask_width_px=float(mask_measurement["width_px"]),
+        )
     )
 
 
@@ -211,6 +474,8 @@ def _path_records_for_image(
     boundary_tolerance_px: float,
     tangent_window_px: float,
     measurement_step_px: float,
+    width_config: VesselWidthConfig,
+    profile_channel_image: np.ndarray | None = None,
 ) -> tuple[List[dict], List[dict]]:
     if not np.any(vessel_mask):
         return [], []
@@ -238,30 +503,39 @@ def _path_records_for_image(
         component_records: List[dict] = []
         for sample_index in range(1, samples_per_connection + 1):
             target_fraction = sample_index / (samples_per_connection + 1)
+            target_length = float(cumulative_lengths[-1] * target_fraction)
             center_xy = interpolate_path_point(
                 path_xy=vessel_path.path_xy,
                 cumulative_lengths=cumulative_lengths,
-                target_length=float(cumulative_lengths[-1] * target_fraction),
+                target_length=target_length,
             )
-            width_value, start_xy, end_xy = measure_vessel_width_at_coordinate(
+            measurement = _measure_sample_width(
                 vessel_mask=vessel_mask,
-                point_xy=center_xy,
+                center_xy=center_xy,
+                vessel_path_xy=vessel_path.path_xy,
+                cumulative_lengths=cumulative_lengths,
+                target_length=target_length,
+                width_config=width_config,
                 skeleton=vessel_path.skeleton,
                 tangent_window_px=tangent_window_px,
                 measurement_step_px=measurement_step_px,
+                profile_channel_image=profile_channel_image,
             )
-            if np.isnan(width_value):
+            if not bool(measurement["measurement_valid"]):
                 # TODO: Recover from local tangent/width failures by re-sampling nearby
                 # skeleton points.
                 component_records = []
                 logger.debug(
-                    "Skipping %s connection %d because width measurement failed at sample %d",
+                    "Skipping %s connection %d because %s failed at sample %d (%s)",
                     image_id,
                     vessel_path.connection_index,
+                    width_config.method,
                     sample_index,
+                    measurement["measurement_failure_reason"],
                 )
                 break
 
+            measurement = _normalize_measurement_result(measurement)
             component_records.append(
                 {
                     "image_id": image_id,
@@ -273,12 +547,8 @@ def _path_records_for_image(
                     "sample_index": sample_index,
                     "x": float(center_xy[0]),
                     "y": float(center_xy[1]),
-                    "width_px": float(width_value),
-                    "x_start": float(start_xy[0]),
-                    "y_start": float(start_xy[1]),
-                    "x_end": float(end_xy[0]),
-                    "y_end": float(end_xy[1]),
                     "vessel_type": vessel_type,
+                    **measurement,
                 }
             )
 
@@ -355,6 +625,8 @@ def measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
     boundary_tolerance_px: float = 1.5,
     tangent_window_px: float = 10.0,
     measurement_step_px: float = 0.25,
+    width_config: VesselWidthConfig | None = None,
+    rgb_dir: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Measure vessel widths and path tortuosities between two circles."""
     if not disc_geometry_path.exists():
@@ -363,6 +635,8 @@ def measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
         raise FileNotFoundError(f"Vessels directory not found: {vessels_dir}")
     if not av_dir.exists():
         raise FileNotFoundError(f"AV directory not found: {av_dir}")
+
+    width_config = VesselWidthConfig() if width_config is None else width_config
 
     df_geometry = pd.read_csv(disc_geometry_path, index_col=0)
     width_records: List[dict] = []
@@ -385,6 +659,27 @@ def measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
 
         vessel_mask = np.array(Image.open(vessel_path)) > 0
         av_mask = np.array(Image.open(av_path))
+        profile_channel_image = None
+        if width_config.method == "profile":
+            if rgb_dir is not None:
+                profile_image_path = rgb_dir / f"{image_id}.png"
+                if profile_image_path.exists():
+                    profile_channel_image = _load_profile_channel_image(
+                        profile_image_path,
+                        channel_name=width_config.profile.channel,
+                    )
+                elif not width_config.profile.fallback_to_mask:
+                    raise FileNotFoundError(
+                        "Profile width measurement requires RGB images in "
+                        f"{rgb_dir}. Missing: {profile_image_path.name}. Set "
+                        "vessel_widths.profile.fallback_to_mask: true to allow fallback."
+                    )
+            elif not width_config.profile.fallback_to_mask:
+                raise FileNotFoundError(
+                    "Profile width measurement requires an RGB image source. Set "
+                    "vessel_widths.profile.fallback_to_mask: true to allow fallback."
+                )
+
         artery_mask, vein_mask = _typed_vessel_masks(vessel_mask, av_mask)
         for typed_mask, vessel_type in ((artery_mask, "artery"), (vein_mask, "vein")):
             image_width_records, image_tortuosity_records = _path_records_for_image(
@@ -401,6 +696,8 @@ def measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
                 boundary_tolerance_px=boundary_tolerance_px,
                 tangent_window_px=tangent_window_px,
                 measurement_step_px=measurement_step_px,
+                width_config=width_config,
+                profile_channel_image=profile_channel_image,
             )
             width_records.extend(image_width_records)
             tortuosity_records.extend(image_tortuosity_records)
@@ -433,6 +730,8 @@ def measure_vessel_widths_between_disc_circle_pair(
     boundary_tolerance_px: float = 1.5,
     tangent_window_px: float = 10.0,
     measurement_step_px: float = 0.25,
+    width_config: VesselWidthConfig | None = None,
+    rgb_dir: Path | None = None,
 ) -> pd.DataFrame:
     """Measure artery and vein widths separately at interior points between two circles."""
     df_widths, _ = measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
@@ -446,6 +745,8 @@ def measure_vessel_widths_between_disc_circle_pair(
         boundary_tolerance_px=boundary_tolerance_px,
         tangent_window_px=tangent_window_px,
         measurement_step_px=measurement_step_px,
+        width_config=width_config,
+        rgb_dir=rgb_dir,
     )
     return df_widths
 

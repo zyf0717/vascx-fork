@@ -170,6 +170,10 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
                 "  inner_circle: 2r",
                 "  outer_circle: 3r",
                 "  samples_per_connection: 4",
+                "  method: profile",
+                "  profile:",
+                "    image_source: preprocessed_rgb",
+                "    fallback_to_mask: true",
             ]
         ),
         encoding="utf-8",
@@ -206,6 +210,8 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         output_dir / "vessel_tortuosities.csv"
     )
     assert calls["measure_vessel_widths"]["samples_per_connection"] == 4
+    assert calls["measure_vessel_widths"]["width_config"].method == "profile"
+    assert calls["measure_vessel_widths"]["rgb_dir"] == output_dir / "preprocessed_rgb"
     assert calls["generate_disc_circles"]["circles"][0].name == "2r"
     assert calls["generate_disc_circles"]["circles"][0].color == (0, 255, 0)
     overlay_calls = calls["batch_create_overlays"]
@@ -349,6 +355,7 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
                 "  inner_circle: 2r",
                 "  outer_circle: 3r",
                 "  samples_per_connection: 4",
+                "  method: profile",
             ]
         ),
         encoding="utf-8",
@@ -379,6 +386,8 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
         output_dir / "disc_geometry.csv"
     )
     assert calls["measure_vessel_widths"]["samples_per_connection"] == 4
+    assert calls["measure_vessel_widths"]["width_config"].method == "profile"
+    assert calls["measure_vessel_widths"]["rgb_dir"] == output_dir / "preprocessed_rgb"
     assert (output_dir / "vessel_widths.csv").exists()
     assert pd.read_csv(output_dir / "vessel_widths.csv").iloc[0]["width_px"] == 7.0
     assert (output_dir / "vessel_tortuosities.csv").exists()
@@ -437,7 +446,9 @@ def test_cli_vessel_metrics_rejects_nonempty_output(tmp_path: Path) -> None:
     output_dir.mkdir()
     (output_dir / "existing.txt").write_text("keep", encoding="utf-8")
 
-    result = CliRunner().invoke(cli, ["vessel-metrics", str(source_dir), str(output_dir)])
+    result = CliRunner().invoke(
+        cli, ["vessel-metrics", str(source_dir), str(output_dir)]
+    )
 
     assert result.exit_code != 0
     assert "not empty" in result.output
@@ -448,7 +459,9 @@ def test_cli_vessel_metrics_rejects_output_inside_source(tmp_path: Path) -> None
     _write_minimal_vessel_metric_intermediates(source_dir)
     output_dir = source_dir / "nested_output"
 
-    result = CliRunner().invoke(cli, ["vessel-metrics", str(source_dir), str(output_dir)])
+    result = CliRunner().invoke(
+        cli, ["vessel-metrics", str(source_dir), str(output_dir)]
+    )
 
     assert result.exit_code != 0
     assert "inside SOURCE_OUTPUT_PATH" in result.output

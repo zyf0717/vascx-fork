@@ -21,6 +21,7 @@ from vascx_models.model_assets import missing_model_paths
 from vascx_models.runtime import configure_runtime_environment
 from vascx_models.utils import batch_create_overlays
 from vascx_models.vessel_widths import (
+    VESSEL_WIDTH_COLUMNS,
     measure_vessel_widths_between_disc_circle_pair,
     resolve_vessel_width_circle_pair,
 )
@@ -29,23 +30,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_IMAGE = REPO_ROOT / "samples" / "fundus" / "original" / "DRIVE_22.png"
-EXPECTED_VESSEL_WIDTH_COLUMNS = [
-    "image_id",
-    "inner_circle",
-    "outer_circle",
-    "inner_circle_radius_px",
-    "outer_circle_radius_px",
-    "connection_index",
-    "sample_index",
-    "x",
-    "y",
-    "width_px",
-    "x_start",
-    "y_start",
-    "x_end",
-    "y_end",
-    "vessel_type",
-]
+EXPECTED_VESSEL_WIDTH_COLUMNS = VESSEL_WIDTH_COLUMNS
 
 
 def _require_e2e_opt_in() -> None:
