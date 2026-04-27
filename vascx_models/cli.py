@@ -65,7 +65,7 @@ def _default_timestamped_output_path(base_dir: Path | None = None) -> Path:
     return parent / f"output_{timestamp}"
 
 
-def _copy_vessel_metric_intermediates(
+def _copy_pipeline_output_for_vessel_metrics(
     source_output_path: Path,
     output_path: Path,
 ) -> tuple[Path, Path, Path]:
@@ -81,10 +81,12 @@ def _copy_vessel_metric_intermediates(
             "Missing required intermediate output(s): " + ", ".join(missing)
         )
 
-    for dirname in VESSEL_METRIC_INTERMEDIATE_DIRS:
-        shutil.copytree(source_output_path / dirname, output_path / dirname)
-    for filename in VESSEL_METRIC_INTERMEDIATE_FILES:
-        shutil.copy2(source_output_path / filename, output_path / filename)
+    for item in source_output_path.iterdir():
+        destination = output_path / item.name
+        if item.is_dir():
+            shutil.copytree(item, destination)
+        else:
+            shutil.copy2(item, destination)
 
     return (
         output_path / "vessels",
@@ -182,9 +184,15 @@ def vessel_metrics(
         output_path = output_path.resolve()
     if source_output_path == output_path:
         raise click.ClickException("OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH")
+    try:
+        output_path.relative_to(source_output_path)
+    except ValueError:
+        pass
+    else:
+        raise click.ClickException("OUTPUT_PATH must not be inside SOURCE_OUTPUT_PATH")
 
     _ensure_empty_or_new_output_dir(output_path)
-    vessels_path, av_path, disc_geometry_path = _copy_vessel_metric_intermediates(
+    vessels_path, av_path, disc_geometry_path = _copy_pipeline_output_for_vessel_metrics(
         source_output_path=source_output_path,
         output_path=output_path,
     )

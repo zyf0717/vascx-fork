@@ -192,11 +192,12 @@ from an existing pipeline output. The source directory must contain:
 - `artery_vein/`
 - `disc_geometry.csv`
 
-Those intermediates are copied into the requested new output directory before
-`vessel_widths.csv`, `vessel_tortuosities.csv`, and `vessel_equivalents.csv`
-are written. When no destination is provided, `vessel-metrics` creates a
-standard `output_YYYYMMDD_HHMMSS` folder in the current working directory. The
-destination must be new or empty.
+The full source output directory is copied into the requested new output
+directory, then `vessel_widths.csv`, `vessel_tortuosities.csv`, and
+`vessel_equivalents.csv` are recomputed there. When no destination is provided,
+`vessel-metrics` creates a standard `output_YYYYMMDD_HHMMSS` folder in the
+current working directory. The destination must be new or empty, and it cannot
+be inside the source output directory.
 
 ## Testing
 

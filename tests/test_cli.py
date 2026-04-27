@@ -12,10 +12,15 @@ from vascx_models.cli import cli
 def _write_minimal_vessel_metric_intermediates(source_dir: Path) -> None:
     vessels_dir = source_dir / "vessels"
     av_dir = source_dir / "artery_vein"
+    preprocessed_dir = source_dir / "preprocessed_rgb"
     vessels_dir.mkdir(parents=True)
     av_dir.mkdir(parents=True)
+    preprocessed_dir.mkdir()
     (vessels_dir / "sample.png").write_bytes(b"vessel")
     (av_dir / "sample.png").write_bytes(b"av")
+    (preprocessed_dir / "sample.png").write_bytes(b"rgb")
+    (source_dir / "quality.csv").write_text("image_id,q1,q2,q3\n", encoding="utf-8")
+    (source_dir / "vessel_widths.csv").write_text("stale\n", encoding="utf-8")
     pd.DataFrame(
         {
             "x_disc_center": [16.0],
@@ -236,7 +241,7 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert vessel_equivalents.iloc[0]["mean_tortuosity_used"] == 1.0
 
 
-def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
+def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
     tmp_path: Path, monkeypatch
 ) -> None:
     source_dir = tmp_path / "source"
@@ -363,6 +368,10 @@ def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
     assert result.exit_code == 0, result.output
     assert (output_dir / "vessels" / "sample.png").read_bytes() == b"vessel"
     assert (output_dir / "artery_vein" / "sample.png").read_bytes() == b"av"
+    assert (output_dir / "preprocessed_rgb" / "sample.png").read_bytes() == b"rgb"
+    assert (output_dir / "quality.csv").read_text(encoding="utf-8") == (
+        "image_id,q1,q2,q3\n"
+    )
     assert (output_dir / "disc_geometry.csv").exists()
     assert calls["measure_vessel_widths"]["vessels_dir"] == output_dir / "vessels"
     assert calls["measure_vessel_widths"]["av_dir"] == output_dir / "artery_vein"
@@ -371,6 +380,7 @@ def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
     )
     assert calls["measure_vessel_widths"]["samples_per_connection"] == 4
     assert (output_dir / "vessel_widths.csv").exists()
+    assert pd.read_csv(output_dir / "vessel_widths.csv").iloc[0]["width_px"] == 7.0
     assert (output_dir / "vessel_tortuosities.csv").exists()
     equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
     assert equivalents.iloc[0]["metric"] == "CRAE"
@@ -414,6 +424,7 @@ def test_cli_vessel_metrics_uses_timestamped_output_when_omitted(
     assert result.exit_code == 0, result.output
     assert created_output_dir.exists()
     assert (created_output_dir / "vessels" / "sample.png").read_bytes() == b"vessel"
+    assert (created_output_dir / "quality.csv").exists()
     assert calls["compute_vessel_metrics"]["output_path"] == created_output_dir
 
 
@@ -430,6 +441,18 @@ def test_cli_vessel_metrics_rejects_nonempty_output(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "not empty" in result.output
+
+
+def test_cli_vessel_metrics_rejects_output_inside_source(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    _write_minimal_vessel_metric_intermediates(source_dir)
+    output_dir = source_dir / "nested_output"
+
+    result = CliRunner().invoke(cli, ["vessel-metrics", str(source_dir), str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "inside SOURCE_OUTPUT_PATH" in result.output
+    assert not output_dir.exists()
 
 
 def test_cli_run_reports_missing_path_column_in_csv(tmp_path: Path, caplog) -> None:
