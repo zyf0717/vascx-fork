@@ -114,7 +114,7 @@ overlay:
 vessel_widths:
   inner_circle: "2r"
   outer_circle: "3r"
-  samples_per_connection: 5
+  samples_per_connection: 5 # <0 measures every interior path pixel, excluding endpoints
   method: "mask"
   pvbm_mask:
     direction_lag_px: 6.0
@@ -139,6 +139,11 @@ vessel_widths:
 Vessel widths are sampled between the configured inner and outer disc circles.
 Each retained vessel connection receives `samples_per_connection` interior
 measurements. `vessel_widths.method` selects the backend:
+
+When `samples_per_connection` is positive, that many evenly spaced interior
+measurements are taken per retained connection. When it is negative, the
+pipeline measures every interior path pixel along the retained vessel trace,
+excluding the start and end pixels.
 
 - `mask`: existing subpixel mask-boundary method, unchanged and still the default.
 - `pvbm_mask`: integer/grid mask-width baseline using the local path direction and a perpendicular normal.

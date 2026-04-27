@@ -452,6 +452,34 @@ def _measure_sample_width(
     )
 
 
+def _sample_targets_for_path(
+    cumulative_lengths: np.ndarray,
+    samples_per_connection: int,
+) -> list[tuple[int, float]]:
+    if samples_per_connection == 0:
+        raise ValueError("samples_per_connection must be non-zero")
+
+    if len(cumulative_lengths) < 3:
+        return []
+
+    if samples_per_connection > 0:
+        return [
+            (
+                sample_index,
+                float(
+                    cumulative_lengths[-1]
+                    * (sample_index / (samples_per_connection + 1))
+                ),
+            )
+            for sample_index in range(1, samples_per_connection + 1)
+        ]
+
+    return [
+        (sample_index, float(target_length))
+        for sample_index, target_length in enumerate(cumulative_lengths[1:-1], start=1)
+    ]
+
+
 def _typed_vessel_masks(
     vessel_mask: np.ndarray,
     av_mask: np.ndarray,
@@ -480,8 +508,8 @@ def _path_records_for_image(
     if not np.any(vessel_mask):
         return [], []
 
-    if samples_per_connection <= 0:
-        raise ValueError("samples_per_connection must be positive")
+    if samples_per_connection == 0:
+        raise ValueError("samples_per_connection must be non-zero")
 
     inner_radius_px = float(disc_radius_px * inner_circle.diameter)
     outer_radius_px = float(disc_radius_px * outer_circle.diameter)
@@ -500,10 +528,14 @@ def _path_records_for_image(
     tortuosity_records: List[dict] = []
     for vessel_path in vessel_paths:
         cumulative_lengths = path_cumulative_lengths(vessel_path.path_xy)
+        sample_targets = _sample_targets_for_path(
+            cumulative_lengths=cumulative_lengths,
+            samples_per_connection=samples_per_connection,
+        )
+        if not sample_targets:
+            continue
         component_records: List[dict] = []
-        for sample_index in range(1, samples_per_connection + 1):
-            target_fraction = sample_index / (samples_per_connection + 1)
-            target_length = float(cumulative_lengths[-1] * target_fraction)
+        for sample_index, target_length in sample_targets:
             center_xy = interpolate_path_point(
                 path_xy=vessel_path.path_xy,
                 cumulative_lengths=cumulative_lengths,
@@ -552,7 +584,7 @@ def _path_records_for_image(
                 }
             )
 
-        if len(component_records) != samples_per_connection:
+        if len(component_records) != len(sample_targets):
             continue
         width_records.extend(component_records)
         tortuosity_records.append(

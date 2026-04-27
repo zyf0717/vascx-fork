@@ -171,6 +171,25 @@ def test_load_app_config_rejects_invalid_vessel_width_samples_per_connection(
         load_app_config(config_path)
 
 
+def test_load_app_config_accepts_negative_vessel_width_samples_per_connection(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  samples_per_connection: -1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app_config = load_app_config(config_path)
+
+    assert app_config.vessel_widths.samples_per_connection == -1
+
+
 def test_load_app_config_rejects_invalid_vessel_width_method(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

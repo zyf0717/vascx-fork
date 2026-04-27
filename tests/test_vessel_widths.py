@@ -415,6 +415,56 @@ def test_measure_vessel_widths_between_disc_circle_pair_measures_many_to_many_fo
     )
 
 
+def test_measure_vessel_widths_between_disc_circle_pair_negative_samples_use_every_interior_path_pixel(
+    tmp_path: Path,
+) -> None:
+    vessels_dir = tmp_path / "vessels"
+    av_dir = tmp_path / "artery_vein"
+    vessels_dir.mkdir()
+    av_dir.mkdir()
+
+    height = width = 160
+    vessel = np.zeros((height, width), dtype=np.uint8)
+    av = np.zeros((height, width), dtype=np.uint8)
+
+    x_center = 80
+    vessel[:, x_center - 3 : x_center + 4] = 1
+    av[:, x_center - 3 : x_center + 4] = 2
+
+    _write_mask(vessels_dir / "sample.png", vessel)
+    _write_mask(av_dir / "sample.png", av)
+
+    geometry_path = tmp_path / "disc_geometry.csv"
+    pd.DataFrame(
+        {
+            "x_disc_center": [80.0],
+            "y_disc_center": [80.0],
+            "disc_radius_px": [20.0],
+        },
+        index=["sample"],
+    ).to_csv(geometry_path)
+
+    df = measure_vessel_widths_between_disc_circle_pair(
+        vessels_dir=vessels_dir,
+        av_dir=av_dir,
+        disc_geometry_path=geometry_path,
+        inner_circle=OverlayCircle(name="inner", diameter=2.0),
+        outer_circle=OverlayCircle(name="outer", diameter=3.0),
+        samples_per_connection=-1,
+    )
+
+    assert len(df) == 38
+    assert sorted(df["connection_index"].unique().tolist()) == [1, 2]
+    assert df.groupby("connection_index")["sample_index"].apply(list).tolist() == [
+        list(range(1, 20)),
+        list(range(1, 20)),
+    ]
+    assert sorted(df["y"].tolist()) == pytest.approx(
+        [float(value) for value in range(21, 40)]
+        + [float(value) for value in range(121, 140)]
+    )
+
+
 @pytest.mark.parametrize(
     ("width_config", "expected_method", "needs_rgb"),
     [

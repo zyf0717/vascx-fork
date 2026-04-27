@@ -295,7 +295,7 @@ def _build_vessel_width_config(
         outer_circle=_coerce_optional_string(
             raw_vessel_widths.get("outer_circle"), "vessel_widths.outer_circle"
         ),
-        samples_per_connection=_coerce_positive_int(
+        samples_per_connection=_coerce_nonzero_int(
             raw_vessel_widths.get("samples_per_connection", 5),
             "vessel_widths.samples_per_connection",
         ),
@@ -472,6 +472,12 @@ def _coerce_positive_int(value: object, field_name: str) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     raise ValueError(f"'{field_name}' must be a positive integer")
+
+
+def _coerce_nonzero_int(value: object, field_name: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+        return value
+    raise ValueError(f"'{field_name}' must be a non-zero integer")
 
 
 def _coerce_optional_string(value: object, field_name: str) -> str | None:
