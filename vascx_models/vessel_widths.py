@@ -1,28 +1,25 @@
 import logging
 import math
-from collections import deque
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from PIL import Image
-from skimage.morphology import skeletonize as skimage_skeletonize
 
 from .config import OverlayCircle
+from .vessel_paths import (
+    interpolate_path_point,
+    path_cumulative_lengths,
+    skeletonize,
+    trace_vessel_paths_between_disc_circle_pair,
+)
+from .vessel_tortuosities import (
+    VESSEL_TORTUOSITY_COLUMNS,
+    vessel_tortuosity_record,
+)
 
 logger = logging.getLogger(__name__)
-
-_NEIGHBORS_8: tuple[tuple[int, int], ...] = (
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-)
 
 VESSEL_WIDTH_COLUMNS = [
     "image_id",
@@ -41,61 +38,6 @@ VESSEL_WIDTH_COLUMNS = [
     "y_end",
     "vessel_type",
 ]
-
-VESSEL_TORTUOSITY_COLUMNS = [
-    "image_id",
-    "inner_circle",
-    "outer_circle",
-    "inner_circle_radius_px",
-    "outer_circle_radius_px",
-    "connection_index",
-    "x_start",
-    "y_start",
-    "x_end",
-    "y_end",
-    "path_length_px",
-    "chord_length_px",
-    "tortuosity",
-    "vessel_type",
-]
-
-
-def _skeletonize(binary_mask: np.ndarray) -> np.ndarray:
-    """Thin a binary mask to a one-pixel-wide skeleton."""
-    if binary_mask.ndim != 2:
-        raise ValueError("Expected a 2D binary mask")
-    return skimage_skeletonize(binary_mask.astype(bool))
-
-
-def _connected_components(mask: np.ndarray) -> List[np.ndarray]:
-    visited = np.zeros_like(mask, dtype=bool)
-    components: List[np.ndarray] = []
-
-    ys, xs = np.nonzero(mask)
-    for seed_y, seed_x in zip(ys, xs):
-        if visited[seed_y, seed_x]:
-            continue
-
-        stack = [(int(seed_y), int(seed_x))]
-        visited[seed_y, seed_x] = True
-        coords: List[Tuple[int, int]] = []
-
-        while stack:
-            y, x = stack.pop()
-            coords.append((y, x))
-            for dy, dx in _NEIGHBORS_8:
-                ny = y + dy
-                nx = x + dx
-                if ny < 0 or nx < 0 or ny >= mask.shape[0] or nx >= mask.shape[1]:
-                    continue
-                if not mask[ny, nx] or visited[ny, nx]:
-                    continue
-                visited[ny, nx] = True
-                stack.append((ny, nx))
-
-        components.append(np.asarray(coords, dtype=np.int32))
-
-    return components
 
 
 def _local_skeleton_points(
@@ -232,7 +174,7 @@ def measure_vessel_width_at_coordinate(
     measurement_step_px: float = 0.25,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Measure vessel width at an arbitrary coordinate using the local skeleton tangent."""
-    skeleton = _skeletonize(vessel_mask) if skeleton is None else skeleton
+    skeleton = skeletonize(vessel_mask) if skeleton is None else skeleton
     local_points = _local_skeleton_points(skeleton, point_xy, tangent_window_px)
     tangent_xy = _estimate_tangent(local_points)
     if tangent_xy is None:
@@ -244,307 +186,6 @@ def measure_vessel_width_at_coordinate(
         center_xy=point_xy,
         tangent_xy=tangent_xy,
         step_px=measurement_step_px,
-    )
-
-
-def _component_neighbor_map(
-    component: np.ndarray,
-) -> dict[tuple[int, int], list[tuple[int, int]]]:
-    points = {tuple(int(value) for value in coord) for coord in component.tolist()}
-    neighbors: dict[tuple[int, int], list[tuple[int, int]]] = {}
-    for y, x in points:
-        adjacent: list[tuple[int, int]] = []
-        for dy, dx in _NEIGHBORS_8:
-            candidate = (y + dy, x + dx)
-            if candidate in points:
-                if (
-                    dy != 0
-                    and dx != 0
-                    and ((y + dy, x) in points or (y, x + dx) in points)
-                ):
-                    continue
-                adjacent.append(candidate)
-        neighbors[(y, x)] = adjacent
-    return neighbors
-
-
-def _boundary_roles_for_component(
-    component: np.ndarray,
-    distances: np.ndarray,
-    inner_radius_px: float,
-    outer_radius_px: float,
-    boundary_tolerance_px: float,
-) -> dict[tuple[int, int], str]:
-    candidates: dict[str, list[tuple[float, tuple[int, int]]]] = {
-        "inner": [],
-        "outer": [],
-    }
-    roles: dict[tuple[int, int], str] = {}
-    for y_value, x_value in component:
-        y = int(y_value)
-        x = int(x_value)
-        inner_delta = abs(float(distances[y, x]) - inner_radius_px)
-        outer_delta = abs(float(distances[y, x]) - outer_radius_px)
-        is_inner = inner_delta <= boundary_tolerance_px
-        is_outer = outer_delta <= boundary_tolerance_px
-        if is_inner == is_outer:
-            continue
-        if is_inner:
-            candidates["inner"].append((inner_delta, (y, x)))
-        else:
-            candidates["outer"].append((outer_delta, (y, x)))
-
-    for role, role_candidates in candidates.items():
-        candidate_deltas = {node: delta for delta, node in role_candidates}
-        remaining = set(candidate_deltas)
-        while remaining:
-            seed = remaining.pop()
-            group = [seed]
-            stack = [seed]
-            while stack:
-                node_y, node_x = stack.pop()
-                for dy, dx in _NEIGHBORS_8:
-                    neighbor = (node_y + dy, node_x + dx)
-                    if neighbor not in remaining:
-                        continue
-                    remaining.remove(neighbor)
-                    group.append(neighbor)
-                    stack.append(neighbor)
-
-            representative = min(group, key=lambda node: (candidate_deltas[node], node))
-            roles[representative] = role
-    return roles
-
-
-def _active_subgraph(
-    neighbors: dict[tuple[int, int], list[tuple[int, int]]],
-    active_nodes: set[tuple[int, int]],
-) -> dict[tuple[int, int], list[tuple[int, int]]]:
-    return {
-        node: [neighbor for neighbor in neighbors[node] if neighbor in active_nodes]
-        for node in active_nodes
-    }
-
-
-def _prune_to_inner_outer_nodes(
-    neighbors: dict[tuple[int, int], list[tuple[int, int]]],
-    boundary_roles: dict[tuple[int, int], str],
-) -> set[tuple[int, int]]:
-    """Remove dead-end skeleton pixels that are not needed for inner-to-outer traces."""
-    active_nodes = set(neighbors)
-    terminal_nodes = set(boundary_roles)
-    queue = deque(
-        node
-        for node in active_nodes
-        if node not in terminal_nodes
-        and sum(1 for neighbor in neighbors[node] if neighbor in active_nodes) <= 1
-    )
-
-    while queue:
-        node = queue.popleft()
-        if node not in active_nodes or node in terminal_nodes:
-            continue
-        active_degree = sum(
-            1 for neighbor in neighbors[node] if neighbor in active_nodes
-        )
-        if active_degree > 1:
-            continue
-
-        active_nodes.remove(node)
-        for neighbor in neighbors[node]:
-            if neighbor not in active_nodes or neighbor in terminal_nodes:
-                continue
-            neighbor_degree = sum(
-                1
-                for next_neighbor in neighbors[neighbor]
-                if next_neighbor in active_nodes
-            )
-            if neighbor_degree <= 1:
-                queue.append(neighbor)
-
-    return active_nodes
-
-
-def _connected_node_groups(
-    graph: dict[tuple[int, int], list[tuple[int, int]]],
-) -> list[set[tuple[int, int]]]:
-    remaining = set(graph)
-    groups: list[set[tuple[int, int]]] = []
-    while remaining:
-        seed = remaining.pop()
-        group = {seed}
-        stack = [seed]
-        while stack:
-            node = stack.pop()
-            for neighbor in graph[node]:
-                if neighbor not in remaining:
-                    continue
-                remaining.remove(neighbor)
-                group.add(neighbor)
-                stack.append(neighbor)
-        groups.append(group)
-    return groups
-
-
-def _trace_segments_between_key_nodes(
-    graph: dict[tuple[int, int], list[tuple[int, int]]],
-    key_nodes: set[tuple[int, int]],
-    boundary_roles: dict[tuple[int, int], str],
-) -> list[np.ndarray]:
-    key_graph = {
-        node: [neighbor for neighbor in graph[node] if neighbor in key_nodes]
-        for node in key_nodes
-    }
-    key_groups = _connected_node_groups(key_graph)
-    key_group_by_node = {
-        node: group_index
-        for group_index, group in enumerate(key_groups)
-        for node in group
-    }
-    boundary_groups = {
-        group_index
-        for group_index, group in enumerate(key_groups)
-        if any(node in boundary_roles for node in group)
-    }
-
-    segments: list[np.ndarray] = []
-    visited_edges: set[frozenset[tuple[int, int]]] = set()
-
-    for start in sorted(key_nodes):
-        for first_neighbor in sorted(graph[start]):
-            if (
-                first_neighbor in key_nodes
-                and key_group_by_node[first_neighbor] == key_group_by_node[start]
-            ):
-                continue
-            first_edge = frozenset((start, first_neighbor))
-            if first_edge in visited_edges:
-                continue
-
-            start_group = key_group_by_node[start]
-            path: list[tuple[int, int]] = []
-            if start_group in boundary_groups:
-                path.append(start)
-            if first_neighbor not in key_nodes:
-                path.append(first_neighbor)
-            visited_edges.add(first_edge)
-            previous = start
-            current = first_neighbor
-
-            while current not in key_nodes:
-                candidates = [
-                    neighbor for neighbor in graph[current] if neighbor != previous
-                ]
-                if len(candidates) != 1:
-                    break
-                next_node = candidates[0]
-                next_edge = frozenset((current, next_node))
-                if next_edge in visited_edges:
-                    break
-                visited_edges.add(next_edge)
-                path.append(next_node)
-                previous, current = current, next_node
-
-            if current in key_nodes and key_group_by_node[current] in boundary_groups:
-                path.append(current)
-
-            if len(path) >= 2:
-                segments.append(np.asarray(path, dtype=float))
-
-    return segments
-
-
-def _inner_outer_branch_segments(
-    component: np.ndarray,
-    distances: np.ndarray,
-    inner_radius_px: float,
-    outer_radius_px: float,
-    boundary_tolerance_px: float,
-) -> list[np.ndarray]:
-    """Return inner-side trunk segments from components with inner-to-outer traces."""
-    neighbors = _component_neighbor_map(component)
-    boundary_roles = _boundary_roles_for_component(
-        component=component,
-        distances=distances,
-        inner_radius_px=inner_radius_px,
-        outer_radius_px=outer_radius_px,
-        boundary_tolerance_px=boundary_tolerance_px,
-    )
-    if "inner" not in boundary_roles.values() or "outer" not in boundary_roles.values():
-        return []
-
-    active_nodes = _prune_to_inner_outer_nodes(neighbors, boundary_roles)
-    active_graph = _active_subgraph(neighbors, active_nodes)
-    segments: list[np.ndarray] = []
-
-    for group in _connected_node_groups(active_graph):
-        group_roles = {role for node, role in boundary_roles.items() if node in group}
-        if group_roles != {"inner", "outer"}:
-            continue
-
-        group_graph = _active_subgraph(active_graph, group)
-        key_nodes = {
-            node
-            for node, adjacent in group_graph.items()
-            if node in boundary_roles or len(adjacent) != 2
-        }
-        if len(key_nodes) < 2:
-            continue
-
-        for segment in _trace_segments_between_key_nodes(
-            group_graph, key_nodes, boundary_roles
-        ):
-            endpoint_roles = {
-                boundary_roles.get((int(segment[0, 0]), int(segment[0, 1]))),
-                boundary_roles.get((int(segment[-1, 0]), int(segment[-1, 1]))),
-            }
-            if "inner" not in endpoint_roles:
-                continue
-            if (
-                distances[int(segment[0, 0]), int(segment[0, 1])]
-                > distances[int(segment[-1, 0]), int(segment[-1, 1])]
-            ):
-                segment = segment[::-1]
-            segments.append(segment)
-
-    return segments
-
-
-def _path_cumulative_lengths(path_xy: np.ndarray) -> np.ndarray:
-    if len(path_xy) == 0:
-        return np.empty(0, dtype=float)
-    if len(path_xy) == 1:
-        return np.zeros(1, dtype=float)
-
-    deltas = np.diff(path_xy, axis=0)
-    segment_lengths = np.hypot(deltas[:, 0], deltas[:, 1])
-    return np.concatenate(([0.0], np.cumsum(segment_lengths)))
-
-
-def _interpolate_path_point(
-    path_xy: np.ndarray,
-    cumulative_lengths: np.ndarray,
-    target_length: float,
-) -> np.ndarray:
-    if len(path_xy) == 1:
-        return path_xy[0].copy()
-
-    clamped_length = min(max(float(target_length), 0.0), float(cumulative_lengths[-1]))
-    upper_index = int(np.searchsorted(cumulative_lengths, clamped_length, side="right"))
-    if upper_index <= 0:
-        return path_xy[0].copy()
-    if upper_index >= len(path_xy):
-        return path_xy[-1].copy()
-
-    lower_index = upper_index - 1
-    lower_length = float(cumulative_lengths[lower_index])
-    upper_length = float(cumulative_lengths[upper_index])
-    if upper_length <= lower_length:
-        return path_xy[lower_index].copy()
-
-    fraction = (clamped_length - lower_length) / (upper_length - lower_length)
-    return path_xy[lower_index] + fraction * (
-        path_xy[upper_index] - path_xy[lower_index]
     )
 
 
@@ -582,127 +223,80 @@ def _path_records_for_image(
     if outer_radius_px <= inner_radius_px:
         raise ValueError("outer_circle must have a larger radius than inner_circle")
 
-    skeleton = _skeletonize(vessel_mask)
-    if not np.any(skeleton):
-        return [], []
-
-    yy, xx = np.indices(vessel_mask.shape, dtype=float)
-    distances = np.hypot(xx - disc_center_xy[0], yy - disc_center_xy[1])
-    annulus_mask = (
-        skeleton & (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    vessel_paths = trace_vessel_paths_between_disc_circle_pair(
+        vessel_mask=vessel_mask,
+        disc_center_xy=disc_center_xy,
+        inner_radius_px=inner_radius_px,
+        outer_radius_px=outer_radius_px,
+        boundary_tolerance_px=boundary_tolerance_px,
     )
-    components = _connected_components(annulus_mask)
 
     width_records: List[dict] = []
     tortuosity_records: List[dict] = []
-    connection_index = 0
-    for component in components:
-        branch_segments_yx = _inner_outer_branch_segments(
-            component=component,
-            distances=distances,
-            inner_radius_px=inner_radius_px,
-            outer_radius_px=outer_radius_px,
-            boundary_tolerance_px=boundary_tolerance_px,
-        )
-        if not branch_segments_yx:
-            logger.debug(
-                "Skipping %s annulus component because it has no inner-to-outer trace",
-                image_id,
+    for vessel_path in vessel_paths:
+        cumulative_lengths = path_cumulative_lengths(vessel_path.path_xy)
+        component_records: List[dict] = []
+        for sample_index in range(1, samples_per_connection + 1):
+            target_fraction = sample_index / (samples_per_connection + 1)
+            center_xy = interpolate_path_point(
+                path_xy=vessel_path.path_xy,
+                cumulative_lengths=cumulative_lengths,
+                target_length=float(cumulative_lengths[-1] * target_fraction),
             )
-            continue
-
-        for segment_yx in branch_segments_yx:
-            path_xy = segment_yx[:, ::-1]
-
-            cumulative_lengths = _path_cumulative_lengths(path_xy)
-            if len(cumulative_lengths) == 0 or cumulative_lengths[-1] <= 0.0:
+            width_value, start_xy, end_xy = measure_vessel_width_at_coordinate(
+                vessel_mask=vessel_mask,
+                point_xy=center_xy,
+                skeleton=vessel_path.skeleton,
+                tangent_window_px=tangent_window_px,
+                measurement_step_px=measurement_step_px,
+            )
+            if np.isnan(width_value):
+                # TODO: Recover from local tangent/width failures by re-sampling nearby
+                # skeleton points.
+                component_records = []
                 logger.debug(
-                    "Skipping %s annulus segment because its path length is zero",
+                    "Skipping %s connection %d because width measurement failed at sample %d",
                     image_id,
+                    vessel_path.connection_index,
+                    sample_index,
                 )
-                continue
+                break
 
-            path_length_px = float(cumulative_lengths[-1])
-            chord_length_px = float(np.linalg.norm(path_xy[-1] - path_xy[0]))
-            tortuosity = (
-                path_length_px / chord_length_px
-                if chord_length_px > 0.0
-                else float("nan")
-            )
-            segment_skeleton = np.zeros_like(skeleton, dtype=bool)
-            segment_rows = segment_yx[:, 0].astype(int)
-            segment_cols = segment_yx[:, 1].astype(int)
-            segment_skeleton[segment_rows, segment_cols] = True
-
-            component_records: List[dict] = []
-            connection_index += 1
-            for sample_index in range(1, samples_per_connection + 1):
-                target_fraction = sample_index / (samples_per_connection + 1)
-                center_xy = _interpolate_path_point(
-                    path_xy=path_xy,
-                    cumulative_lengths=cumulative_lengths,
-                    target_length=float(cumulative_lengths[-1] * target_fraction),
-                )
-                width_value, start_xy, end_xy = measure_vessel_width_at_coordinate(
-                    vessel_mask=vessel_mask,
-                    point_xy=center_xy,
-                    skeleton=segment_skeleton,
-                    tangent_window_px=tangent_window_px,
-                    measurement_step_px=measurement_step_px,
-                )
-                if np.isnan(width_value):
-                    # TODO: Recover from local tangent/width failures by re-sampling nearby
-                    # skeleton points.
-                    component_records = []
-                    logger.debug(
-                        "Skipping %s connection %d because width measurement failed at sample %d",
-                        image_id,
-                        connection_index,
-                        sample_index,
-                    )
-                    break
-
-                component_records.append(
-                    {
-                        "image_id": image_id,
-                        "inner_circle": inner_circle.name,
-                        "outer_circle": outer_circle.name,
-                        "inner_circle_radius_px": inner_radius_px,
-                        "outer_circle_radius_px": outer_radius_px,
-                        "connection_index": connection_index,
-                        "sample_index": sample_index,
-                        "x": float(center_xy[0]),
-                        "y": float(center_xy[1]),
-                        "width_px": float(width_value),
-                        "x_start": float(start_xy[0]),
-                        "y_start": float(start_xy[1]),
-                        "x_end": float(end_xy[0]),
-                        "y_end": float(end_xy[1]),
-                        "vessel_type": vessel_type,
-                    }
-                )
-
-            if len(component_records) != samples_per_connection:
-                continue
-            width_records.extend(component_records)
-            tortuosity_records.append(
+            component_records.append(
                 {
                     "image_id": image_id,
                     "inner_circle": inner_circle.name,
                     "outer_circle": outer_circle.name,
                     "inner_circle_radius_px": inner_radius_px,
                     "outer_circle_radius_px": outer_radius_px,
-                    "connection_index": connection_index,
-                    "x_start": float(path_xy[0, 0]),
-                    "y_start": float(path_xy[0, 1]),
-                    "x_end": float(path_xy[-1, 0]),
-                    "y_end": float(path_xy[-1, 1]),
-                    "path_length_px": path_length_px,
-                    "chord_length_px": chord_length_px,
-                    "tortuosity": float(tortuosity),
+                    "connection_index": vessel_path.connection_index,
+                    "sample_index": sample_index,
+                    "x": float(center_xy[0]),
+                    "y": float(center_xy[1]),
+                    "width_px": float(width_value),
+                    "x_start": float(start_xy[0]),
+                    "y_start": float(start_xy[1]),
+                    "x_end": float(end_xy[0]),
+                    "y_end": float(end_xy[1]),
                     "vessel_type": vessel_type,
                 }
             )
+
+        if len(component_records) != samples_per_connection:
+            continue
+        width_records.extend(component_records)
+        tortuosity_records.append(
+            vessel_tortuosity_record(
+                image_id=image_id,
+                vessel_type=vessel_type,
+                inner_circle=inner_circle,
+                outer_circle=outer_circle,
+                inner_radius_px=inner_radius_px,
+                outer_radius_px=outer_radius_px,
+                connection_index=vessel_path.connection_index,
+                path_xy=vessel_path.path_xy,
+            )
+        )
 
     return width_records, tortuosity_records
 
