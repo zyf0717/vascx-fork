@@ -72,7 +72,8 @@ python -m vascx_models run /path/to/image_list.csv /path/to/output              
 python -m vascx_models run /path/to/images /path/to/output --no-preprocess             # skip preprocessing step
 python -m vascx_models run /path/to/images /path/to/output --device cpu                # force CPU inference
 python -m vascx_models run /path/to/images /path/to/output --no-disc --no-quality --no-fovea --no-overlay  # vessels only
-python -m vascx_models vessel-metrics /path/to/existing_output /path/to/new_metrics_output  # recompute vessel metrics from intermediates
+python -m vascx_models vessel-metrics /path/to/existing_output                            # writes output_YYYYMMDD_HHMMSS
+python -m vascx_models vessel-metrics /path/to/existing_output /path/to/new_metrics_output # explicit metrics output path
 ```
 
 Device selection defaults to `auto` (prefers `cuda`, then `mps`, then `cpu`). Requesting an unavailable accelerator exits with an error rather than silently falling back.
@@ -193,7 +194,9 @@ from an existing pipeline output. The source directory must contain:
 
 Those intermediates are copied into the requested new output directory before
 `vessel_widths.csv`, `vessel_tortuosities.csv`, and `vessel_equivalents.csv`
-are written. The destination must be new or empty.
+are written. When no destination is provided, `vessel-metrics` creates a
+standard `output_YYYYMMDD_HHMMSS` folder in the current working directory. The
+destination must be new or empty.
 
 ## Testing
 

@@ -2,6 +2,7 @@ import logging
 import shutil
 import warnings
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -56,6 +57,12 @@ def _ensure_empty_or_new_output_dir(output_path: Path) -> None:
             f"Output path already exists and is not empty: {output_path}"
         )
     output_path.mkdir(exist_ok=True, parents=True)
+
+
+def _default_timestamped_output_path(base_dir: Path | None = None) -> Path:
+    parent = Path.cwd() if base_dir is None else base_dir
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return parent / f"output_{timestamp}"
 
 
 def _copy_vessel_metric_intermediates(
@@ -149,7 +156,7 @@ def cli():
     "source_output_path",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
-@click.argument("output_path", type=click.Path(path_type=Path))
+@click.argument("output_path", required=False, type=click.Path(path_type=Path))
 @click.option(
     "--config",
     "config_path",
@@ -157,14 +164,22 @@ def cli():
     default=None,
     help="Path to a YAML config file. Defaults to ./config.yaml or the repo-root config.yaml when present.",
 )
-def vessel_metrics(source_output_path: Path, output_path: Path, config_path: Path | None):
+def vessel_metrics(
+    source_output_path: Path,
+    output_path: Path | None,
+    config_path: Path | None,
+):
     """Recompute vessel metrics from an existing pipeline output directory.
 
     SOURCE_OUTPUT_PATH must contain vessels/, artery_vein/, and disc_geometry.csv.
-    Those intermediates are copied into OUTPUT_PATH before metrics are written.
+    Those intermediates are copied into OUTPUT_PATH before metrics are written. When
+    OUTPUT_PATH is omitted, a timestamped output_YYYYMMDD_HHMMSS folder is created.
     """
     source_output_path = source_output_path.resolve()
-    output_path = output_path.resolve()
+    if output_path is None:
+        output_path = _default_timestamped_output_path().resolve()
+    else:
+        output_path = output_path.resolve()
     if source_output_path == output_path:
         raise click.ClickException("OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH")
 

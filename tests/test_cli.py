@@ -9,6 +9,23 @@ from PIL import Image
 from vascx_models.cli import cli
 
 
+def _write_minimal_vessel_metric_intermediates(source_dir: Path) -> None:
+    vessels_dir = source_dir / "vessels"
+    av_dir = source_dir / "artery_vein"
+    vessels_dir.mkdir(parents=True)
+    av_dir.mkdir(parents=True)
+    (vessels_dir / "sample.png").write_bytes(b"vessel")
+    (av_dir / "sample.png").write_bytes(b"av")
+    pd.DataFrame(
+        {
+            "x_disc_center": [16.0],
+            "y_disc_center": [16.0],
+            "disc_radius_px": [5.0],
+        },
+        index=["sample"],
+    ).to_csv(source_dir / "disc_geometry.csv")
+
+
 def test_cli_run_passes_measurement_config_and_data_to_overlays(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -224,20 +241,7 @@ def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
 ) -> None:
     source_dir = tmp_path / "source"
     output_dir = tmp_path / "metrics"
-    vessels_dir = source_dir / "vessels"
-    av_dir = source_dir / "artery_vein"
-    vessels_dir.mkdir(parents=True)
-    av_dir.mkdir(parents=True)
-    (vessels_dir / "sample.png").write_bytes(b"vessel")
-    (av_dir / "sample.png").write_bytes(b"av")
-    pd.DataFrame(
-        {
-            "x_disc_center": [16.0],
-            "y_disc_center": [16.0],
-            "disc_radius_px": [5.0],
-        },
-        index=["sample"],
-    ).to_csv(source_dir / "disc_geometry.csv")
+    _write_minimal_vessel_metric_intermediates(source_dir)
 
     calls: dict[str, object] = {}
 
@@ -371,6 +375,46 @@ def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
     equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
     assert equivalents.iloc[0]["metric"] == "CRAE"
     assert equivalents.iloc[0]["mean_tortuosity_used"] == 1.1
+
+
+def test_cli_vessel_metrics_uses_timestamped_output_when_omitted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    _write_minimal_vessel_metric_intermediates(source_dir)
+    created_output_dir = tmp_path / "output_20260427_123456"
+    calls: dict[str, object] = {}
+
+    class FixedDatetime:
+        @classmethod
+        def now(cls):
+            return cls()
+
+        def strftime(self, fmt):
+            assert fmt == "%Y%m%d_%H%M%S"
+            return "20260427_123456"
+
+    def fake_compute_and_save_vessel_metrics(**kwargs):
+        calls["compute_vessel_metrics"] = kwargs
+        (kwargs["output_path"] / "vessel_widths.csv").write_text(
+            "image_id\n", encoding="utf-8"
+        )
+        return tuple(pd.DataFrame() for _ in range(4))
+
+    monkeypatch.setattr("vascx_models.cli.datetime", FixedDatetime)
+    monkeypatch.setattr(
+        "vascx_models.cli._compute_and_save_vessel_metrics",
+        fake_compute_and_save_vessel_metrics,
+    )
+
+    with monkeypatch.context() as context:
+        context.chdir(tmp_path)
+        result = CliRunner().invoke(cli, ["vessel-metrics", str(source_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert created_output_dir.exists()
+    assert (created_output_dir / "vessels" / "sample.png").read_bytes() == b"vessel"
+    assert calls["compute_vessel_metrics"]["output_path"] == created_output_dir
 
 
 def test_cli_vessel_metrics_rejects_nonempty_output(tmp_path: Path) -> None:
