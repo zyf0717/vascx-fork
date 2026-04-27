@@ -72,6 +72,7 @@ python -m vascx_models run /path/to/image_list.csv /path/to/output              
 python -m vascx_models run /path/to/images /path/to/output --no-preprocess             # skip preprocessing step
 python -m vascx_models run /path/to/images /path/to/output --device cpu                # force CPU inference
 python -m vascx_models run /path/to/images /path/to/output --no-disc --no-quality --no-fovea --no-overlay  # vessels only
+python -m vascx_models vessel-metrics /path/to/existing_output /path/to/new_metrics_output  # recompute vessel metrics from intermediates
 ```
 
 Device selection defaults to `auto` (prefers `cuda`, then `mps`, then `cpu`). Requesting an unavailable accelerator exits with an error rather than silently falling back.
@@ -180,6 +181,19 @@ Overlay directories:
 
 The CRAE/CRVE values are pixel-space equivalents unless you apply an external
 pixel-to-length calibration.
+
+## Recomputing Vessel Metrics
+
+`vessel-metrics` runs only the path, width, tortuosity, and CRAE/CRVE stages
+from an existing pipeline output. The source directory must contain:
+
+- `vessels/`
+- `artery_vein/`
+- `disc_geometry.csv`
+
+Those intermediates are copied into the requested new output directory before
+`vessel_widths.csv`, `vessel_tortuosities.csv`, and `vessel_equivalents.csv`
+are written. The destination must be new or empty.
 
 ## Testing
 

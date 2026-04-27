@@ -219,6 +219,175 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert vessel_equivalents.iloc[0]["mean_tortuosity_used"] == 1.0
 
 
+def test_cli_vessel_metrics_copies_intermediates_and_writes_outputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_dir = tmp_path / "metrics"
+    vessels_dir = source_dir / "vessels"
+    av_dir = source_dir / "artery_vein"
+    vessels_dir.mkdir(parents=True)
+    av_dir.mkdir(parents=True)
+    (vessels_dir / "sample.png").write_bytes(b"vessel")
+    (av_dir / "sample.png").write_bytes(b"av")
+    pd.DataFrame(
+        {
+            "x_disc_center": [16.0],
+            "y_disc_center": [16.0],
+            "disc_radius_px": [5.0],
+        },
+        index=["sample"],
+    ).to_csv(source_dir / "disc_geometry.csv")
+
+    calls: dict[str, object] = {}
+
+    def fake_measure_vessel_widths_and_tortuosities_between_disc_circle_pair(**kwargs):
+        calls["measure_vessel_widths"] = kwargs
+        df_widths = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 1,
+                    "sample_index": 1,
+                    "x": 16.0,
+                    "y": 12.0,
+                    "width_px": 7.0,
+                    "x_start": 13.0,
+                    "y_start": 12.0,
+                    "x_end": 19.0,
+                    "y_end": 12.0,
+                    "vessel_type": "artery",
+                },
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 2,
+                    "sample_index": 1,
+                    "x": 20.0,
+                    "y": 12.0,
+                    "width_px": 8.0,
+                    "x_start": 17.0,
+                    "y_start": 12.0,
+                    "x_end": 23.0,
+                    "y_end": 12.0,
+                    "vessel_type": "artery",
+                },
+            ]
+        )
+        df_tortuosities = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 1,
+                    "x_start": 16.0,
+                    "y_start": 10.0,
+                    "x_end": 16.0,
+                    "y_end": 15.0,
+                    "path_length_px": 5.0,
+                    "chord_length_px": 5.0,
+                    "tortuosity": 1.0,
+                    "vessel_type": "artery",
+                },
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 2,
+                    "x_start": 20.0,
+                    "y_start": 10.0,
+                    "x_end": 20.0,
+                    "y_end": 16.0,
+                    "path_length_px": 7.2,
+                    "chord_length_px": 6.0,
+                    "tortuosity": 1.2,
+                    "vessel_type": "artery",
+                },
+            ]
+        )
+        df_widths.to_csv(kwargs["output_path"], index=False)
+        df_tortuosities.to_csv(kwargs["tortuosity_output_path"], index=False)
+        return df_widths, df_tortuosities
+
+    monkeypatch.setattr(
+        "vascx_models.cli.measure_vessel_widths_and_tortuosities_between_disc_circle_pair",
+        fake_measure_vessel_widths_and_tortuosities_between_disc_circle_pair,
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "overlay:",
+                "  circles:",
+                "    - name: 2r",
+                "      diameter: 2.0",
+                "    - name: 3r",
+                "      diameter: 3.0",
+                "vessel_widths:",
+                "  inner_circle: 2r",
+                "  outer_circle: 3r",
+                "  samples_per_connection: 4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "vessel-metrics",
+            str(source_dir),
+            str(output_dir),
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (output_dir / "vessels" / "sample.png").read_bytes() == b"vessel"
+    assert (output_dir / "artery_vein" / "sample.png").read_bytes() == b"av"
+    assert (output_dir / "disc_geometry.csv").exists()
+    assert calls["measure_vessel_widths"]["vessels_dir"] == output_dir / "vessels"
+    assert calls["measure_vessel_widths"]["av_dir"] == output_dir / "artery_vein"
+    assert calls["measure_vessel_widths"]["disc_geometry_path"] == (
+        output_dir / "disc_geometry.csv"
+    )
+    assert calls["measure_vessel_widths"]["samples_per_connection"] == 4
+    assert (output_dir / "vessel_widths.csv").exists()
+    assert (output_dir / "vessel_tortuosities.csv").exists()
+    equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
+    assert equivalents.iloc[0]["metric"] == "CRAE"
+    assert equivalents.iloc[0]["mean_tortuosity_used"] == 1.1
+
+
+def test_cli_vessel_metrics_rejects_nonempty_output(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    (source_dir / "vessels").mkdir(parents=True)
+    (source_dir / "artery_vein").mkdir()
+    (source_dir / "disc_geometry.csv").write_text("image_id\n", encoding="utf-8")
+    output_dir = tmp_path / "metrics"
+    output_dir.mkdir()
+    (output_dir / "existing.txt").write_text("keep", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["vessel-metrics", str(source_dir), str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "not empty" in result.output
+
+
 def test_cli_run_reports_missing_path_column_in_csv(tmp_path: Path, caplog) -> None:
     csv_path = tmp_path / "images.csv"
     output_dir = tmp_path / "output"

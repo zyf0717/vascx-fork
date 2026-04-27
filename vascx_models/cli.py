@@ -1,4 +1,5 @@
 import logging
+import shutil
 import warnings
 from dataclasses import replace
 from pathlib import Path
@@ -32,6 +33,9 @@ from .utils import batch_create_overlays
 
 logger = logging.getLogger(__name__)
 
+VESSEL_METRIC_INTERMEDIATE_DIRS = ("vessels", "artery_vein")
+VESSEL_METRIC_INTERMEDIATE_FILES = ("disc_geometry.csv",)
+
 
 def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -46,9 +50,137 @@ def configure_logging() -> None:
     )
 
 
+def _ensure_empty_or_new_output_dir(output_path: Path) -> None:
+    if output_path.exists() and any(output_path.iterdir()):
+        raise click.ClickException(
+            f"Output path already exists and is not empty: {output_path}"
+        )
+    output_path.mkdir(exist_ok=True, parents=True)
+
+
+def _copy_vessel_metric_intermediates(
+    source_output_path: Path,
+    output_path: Path,
+) -> tuple[Path, Path, Path]:
+    missing: list[str] = []
+    for dirname in VESSEL_METRIC_INTERMEDIATE_DIRS:
+        if not (source_output_path / dirname).is_dir():
+            missing.append(dirname)
+    for filename in VESSEL_METRIC_INTERMEDIATE_FILES:
+        if not (source_output_path / filename).is_file():
+            missing.append(filename)
+    if missing:
+        raise click.ClickException(
+            "Missing required intermediate output(s): " + ", ".join(missing)
+        )
+
+    for dirname in VESSEL_METRIC_INTERMEDIATE_DIRS:
+        shutil.copytree(source_output_path / dirname, output_path / dirname)
+    for filename in VESSEL_METRIC_INTERMEDIATE_FILES:
+        shutil.copy2(source_output_path / filename, output_path / filename)
+
+    return (
+        output_path / "vessels",
+        output_path / "artery_vein",
+        output_path / "disc_geometry.csv",
+    )
+
+
+def _compute_and_save_vessel_metrics(
+    vessels_path: Path,
+    av_path: Path,
+    disc_geometry_path: Path,
+    output_path: Path,
+    config_path: Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    try:
+        app_config = load_app_config(config_path)
+        inner_circle, outer_circle = resolve_vessel_width_circle_pair(
+            app_config.overlay.circles,
+            inner_circle_name=app_config.vessel_widths.inner_circle,
+            outer_circle_name=app_config.vessel_widths.outer_circle,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    vessel_widths_path = output_path / "vessel_widths.csv"
+    vessel_tortuosities_path = output_path / "vessel_tortuosities.csv"
+    vessel_equivalents_path = output_path / "vessel_equivalents.csv"
+
+    logger.info(
+        "Measuring vessel metrics between %s and %s with %d samples per connection",
+        inner_circle.name,
+        outer_circle.name,
+        app_config.vessel_widths.samples_per_connection,
+    )
+    df_vessel_widths, df_vessel_tortuosities = (
+        measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
+            vessels_dir=vessels_path,
+            av_dir=av_path,
+            disc_geometry_path=disc_geometry_path,
+            inner_circle=inner_circle,
+            outer_circle=outer_circle,
+            output_path=vessel_widths_path,
+            tortuosity_output_path=vessel_tortuosities_path,
+            samples_per_connection=app_config.vessel_widths.samples_per_connection,
+        )
+    )
+    df_connection_widths, df_vessel_equivalents = compute_revised_crx_from_widths(
+        df_vessel_widths,
+        df_tortuosities=df_vessel_tortuosities,
+    )
+    df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
+    logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)
+    return (
+        df_vessel_widths,
+        df_vessel_tortuosities,
+        df_connection_widths,
+        df_vessel_equivalents,
+    )
+
+
 @click.group(name="vascx")
 def cli():
     configure_logging()
+
+
+@cli.command(name="vessel-metrics")
+@click.argument(
+    "source_output_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to a YAML config file. Defaults to ./config.yaml or the repo-root config.yaml when present.",
+)
+def vessel_metrics(source_output_path: Path, output_path: Path, config_path: Path | None):
+    """Recompute vessel metrics from an existing pipeline output directory.
+
+    SOURCE_OUTPUT_PATH must contain vessels/, artery_vein/, and disc_geometry.csv.
+    Those intermediates are copied into OUTPUT_PATH before metrics are written.
+    """
+    source_output_path = source_output_path.resolve()
+    output_path = output_path.resolve()
+    if source_output_path == output_path:
+        raise click.ClickException("OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH")
+
+    _ensure_empty_or_new_output_dir(output_path)
+    vessels_path, av_path, disc_geometry_path = _copy_vessel_metric_intermediates(
+        source_output_path=source_output_path,
+        output_path=output_path,
+    )
+    _compute_and_save_vessel_metrics(
+        vessels_path=vessels_path,
+        av_path=av_path,
+        disc_geometry_path=disc_geometry_path,
+        output_path=output_path,
+        config_path=config_path,
+    )
+    logger.info("Vessel metrics complete. Results saved to %s", output_path)
 
 
 @cli.command()
@@ -268,40 +400,18 @@ def run(
     df_vessel_widths = None
     df_selected_equivalent_widths = None
     if disc and vessels:
-        try:
-            inner_circle, outer_circle = resolve_vessel_width_circle_pair(
-                app_config.overlay.circles,
-                inner_circle_name=app_config.vessel_widths.inner_circle,
-                outer_circle_name=app_config.vessel_widths.outer_circle,
-            )
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from exc
-
-        logger.info(
-            "Measuring vessel widths between %s and %s with %d samples per connection",
-            inner_circle.name,
-            outer_circle.name,
-            app_config.vessel_widths.samples_per_connection,
-        )
         (
             df_vessel_widths,
             df_vessel_tortuosities,
-        ) = measure_vessel_widths_and_tortuosities_between_disc_circle_pair(
-            vessels_dir=vessels_path,
-            av_dir=av_path,
+            df_connection_widths,
+            _,
+        ) = _compute_and_save_vessel_metrics(
+            vessels_path=vessels_path,
+            av_path=av_path,
             disc_geometry_path=disc_geometry_path,
-            inner_circle=inner_circle,
-            outer_circle=outer_circle,
-            output_path=vessel_widths_path,
-            tortuosity_output_path=vessel_tortuosities_path,
-            samples_per_connection=app_config.vessel_widths.samples_per_connection,
+            output_path=output_path,
+            config_path=config_path,
         )
-        df_connection_widths, df_vessel_equivalents = compute_revised_crx_from_widths(
-            df_vessel_widths,
-            df_tortuosities=df_vessel_tortuosities,
-        )
-        df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
-        logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)
         df_selected_equivalent_widths = select_vessel_width_measurements_for_equivalents(
             df_vessel_widths,
             df_connection_widths,
