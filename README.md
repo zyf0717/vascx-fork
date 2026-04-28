@@ -98,8 +98,8 @@ pipeline measures every interior path pixel along the retained vessel trace,
 excluding the start and end pixels.
 
 - `mask`: existing subpixel mask-boundary method, unchanged and still the default.
-- `pvbm_mask`: integer/grid mask-width baseline using the local path direction and a perpendicular normal.
-- `profile`: green-channel image-profile-derived width estimation. By default this reads from `preprocessed_rgb/`; if those RGB images are unavailable the run fails clearly unless `vessel_widths.profile.fallback_to_mask` is enabled.
+- `pvbm_mask`: integer/grid mask-width baseline using the local path direction and a perpendicular normal. This route is available, but it is comparatively lightly tested and should be treated as less validated than the default `mask` backend.
+- `profile`: green-channel image-profile-derived width estimation. By default this reads from `preprocessed_rgb/`; if those RGB images are unavailable the run fails clearly unless `vessel_widths.profile.fallback_to_mask` is enabled. This route is also comparatively lightly tested and should be treated as less validated than the default `mask` backend.
 
 The `profile` backend uses the mask width only as a guardrail/reference. CRAE/CRVE aggregation continues to use the per-sample `width_px` values emitted by the active backend.
 
@@ -211,3 +211,5 @@ pytest tests/test_e2e.py -q -k cpu                                      # real-m
 ```
 
 The e2e test skips automatically when model weights have not been downloaded.
+
+The default `mask` width path has the broadest coverage in the current test suite. The `pvbm_mask` and `profile` width routes have targeted unit coverage, but they are not yet as well tested as the default backend.

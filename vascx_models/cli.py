@@ -158,6 +158,18 @@ def _overlay_circle_dirs(output_path: Path, circles) -> dict[str, Path]:
     }
 
 
+def _overlay_config_with_selected_circles(overlay_config, circle_names):
+    selected_circle_names = set(circle_names)
+    return replace(
+        overlay_config,
+        circles=tuple(
+            circle
+            for circle in overlay_config.circles
+            if circle.name in selected_circle_names
+        ),
+    )
+
+
 def _tortuosity_overlay_config(overlay_config):
     return replace(
         overlay_config,
@@ -184,6 +196,8 @@ def _render_metric_overlays(
     output_path: Path,
     rgb_dir: Path,
     overlay_config,
+    width_circle_names: tuple[str, str] | None,
+    tortuosity_circle_names: tuple[str, str] | None,
     av_dir: Path | None,
     disc_dir: Path | None,
     vessels_dir: Path,
@@ -193,6 +207,28 @@ def _render_metric_overlays(
     fovea_data: dict[str, tuple[int, int]] | None,
 ) -> None:
     circle_dirs = _overlay_circle_dirs(output_path, overlay_config.circles)
+    width_overlay_config = (
+        _width_overlay_config(
+            _overlay_config_with_selected_circles(overlay_config, width_circle_names)
+        )
+        if width_circle_names is not None
+        else _width_overlay_config(overlay_config)
+    )
+    width_circle_dirs = _overlay_circle_dirs(output_path, width_overlay_config.circles)
+    tortuosity_overlay_config = (
+        _tortuosity_overlay_config(
+            _overlay_config_with_selected_circles(
+                overlay_config,
+                tortuosity_circle_names,
+            )
+        )
+        if tortuosity_circle_names is not None
+        else _tortuosity_overlay_config(overlay_config)
+    )
+    tortuosity_circle_dirs = _overlay_circle_dirs(
+        output_path,
+        tortuosity_overlay_config.circles,
+    )
 
     batch_create_overlays(
         rgb_dir=rgb_dir,
@@ -213,10 +249,10 @@ def _render_metric_overlays(
             av_dir=av_dir,
             disc_dir=disc_dir,
             vessels_dir=vessels_dir,
-            circle_dirs=circle_dirs,
+            circle_dirs=tortuosity_circle_dirs,
             tortuosity_data=df_vessel_tortuosities,
             fovea_data=fovea_data,
-            overlay_config=_tortuosity_overlay_config(overlay_config),
+            overlay_config=tortuosity_overlay_config,
         )
         logger.info(
             "Vessel tortuosity overlays saved to %s",
@@ -230,10 +266,10 @@ def _render_metric_overlays(
             av_dir=av_dir,
             disc_dir=disc_dir,
             vessels_dir=vessels_dir,
-            circle_dirs=circle_dirs,
+            circle_dirs=width_circle_dirs,
             vessel_width_data=df_selected_equivalent_widths,
             fovea_data=fovea_data,
-            overlay_config=_width_overlay_config(overlay_config),
+            overlay_config=width_overlay_config,
         )
         logger.info(
             "Vessel width overlays saved to %s",
@@ -327,6 +363,26 @@ def _refresh_vessel_metric_overlays(
         output_path=output_path,
         rgb_dir=rgb_dir,
         overlay_config=app_config.overlay,
+        width_circle_names=(
+            (
+                app_config.vessel_widths.inner_circle,
+                app_config.vessel_widths.outer_circle,
+            )
+            if app_config.vessel_widths.enabled
+            and app_config.vessel_widths.inner_circle is not None
+            and app_config.vessel_widths.outer_circle is not None
+            else None
+        ),
+        tortuosity_circle_names=(
+            (
+                app_config.vessel_tortuosities.inner_circle,
+                app_config.vessel_tortuosities.outer_circle,
+            )
+            if app_config.vessel_tortuosities.enabled
+            and app_config.vessel_tortuosities.inner_circle is not None
+            and app_config.vessel_tortuosities.outer_circle is not None
+            else None
+        ),
         av_dir=output_path / "artery_vein",
         disc_dir=disc_dir if disc_dir.is_dir() else None,
         vessels_dir=output_path / "vessels",
@@ -847,6 +903,26 @@ def run(
             output_path=output_path,
             rgb_dir=preprocess_rgb_path if preprocess else data_path,
             overlay_config=app_config.overlay,
+            width_circle_names=(
+                (
+                    app_config.vessel_widths.inner_circle,
+                    app_config.vessel_widths.outer_circle,
+                )
+                if app_config.vessel_widths.enabled
+                and app_config.vessel_widths.inner_circle is not None
+                and app_config.vessel_widths.outer_circle is not None
+                else None
+            ),
+            tortuosity_circle_names=(
+                (
+                    app_config.vessel_tortuosities.inner_circle,
+                    app_config.vessel_tortuosities.outer_circle,
+                )
+                if app_config.vessel_tortuosities.enabled
+                and app_config.vessel_tortuosities.inner_circle is not None
+                and app_config.vessel_tortuosities.outer_circle is not None
+                else None
+            ),
             av_dir=av_path,
             disc_dir=disc_path,
             vessels_dir=vessels_path,

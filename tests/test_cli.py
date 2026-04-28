@@ -252,6 +252,12 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert overlay_calls[1]["disc_dir"] == output_dir / "disc"
     assert overlay_calls[1]["vessels_dir"] == output_dir / "vessels"
     assert overlay_calls[1]["circle_dirs"]["2r"] == output_dir / "disc_circles" / "2r"
+    assert overlay_calls[1]["circle_dirs"]["5r"] == output_dir / "disc_circles" / "5r"
+    assert set(overlay_calls[1]["circle_dirs"]) == {"2r", "5r"}
+    assert [circle.name for circle in overlay_calls[1]["overlay_config"].circles] == [
+        "2r",
+        "5r",
+    ]
     assert overlay_calls[1]["tortuosity_data"].iloc[0]["tortuosity"] == 1.0
     assert overlay_calls[1]["fovea_data"] is None
     assert overlay_calls[1]["overlay_config"].colors.vessel == (0, 255, 0)
@@ -261,6 +267,13 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert overlay_calls[1]["overlay_config"].layers.fovea is True
     assert overlay_calls[2]["output_dir"] == output_dir / "vessel_width_overlays"
     assert overlay_calls[2]["overlay_config"].layers.vessel_widths is True
+    assert overlay_calls[2]["circle_dirs"]["2r"] == output_dir / "disc_circles" / "2r"
+    assert overlay_calls[2]["circle_dirs"]["3r"] == output_dir / "disc_circles" / "3r"
+    assert set(overlay_calls[2]["circle_dirs"]) == {"2r", "3r"}
+    assert [circle.name for circle in overlay_calls[2]["overlay_config"].circles] == [
+        "2r",
+        "3r",
+    ]
     selected_measurement_data = overlay_calls[2]["vessel_width_data"]
     assert isinstance(selected_measurement_data, pd.DataFrame)
     assert selected_measurement_data.iloc[0]["width_px"] == 7.0
