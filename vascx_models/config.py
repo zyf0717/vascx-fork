@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -7,6 +8,7 @@ from typing import Iterable, Mapping
 import yaml
 
 DEFAULT_CONFIG_NAME = "config.yaml"
+DEFAULT_DERIVED_CIRCLE_COLOR = (0, 255, 0)
 
 
 def _repo_root() -> Path:
@@ -41,8 +43,9 @@ class OverlayCircle:
 
 def default_overlay_circles() -> tuple[OverlayCircle, ...]:
     return (
-        OverlayCircle(name="2r", diameter=2.0),
-        OverlayCircle(name="3r", diameter=3.0),
+        OverlayCircle(name="2r", diameter=2.0, color=DEFAULT_DERIVED_CIRCLE_COLOR),
+        OverlayCircle(name="3r", diameter=3.0, color=DEFAULT_DERIVED_CIRCLE_COLOR),
+        OverlayCircle(name="5r", diameter=5.0, color=DEFAULT_DERIVED_CIRCLE_COLOR),
     )
 
 
@@ -56,8 +59,9 @@ class OverlayConfig:
 
 @dataclass(frozen=True)
 class VesselWidthConfig:
-    inner_circle: str | None = None
-    outer_circle: str | None = None
+    enabled: bool = True
+    inner_circle: str | None = "2r"
+    outer_circle: str | None = "3r"
     samples_per_connection: int = 5
     method: str = "mask"
     pvbm_mask: "PVBMMaskWidthConfig" = field(
@@ -68,8 +72,9 @@ class VesselWidthConfig:
 
 @dataclass(frozen=True)
 class VesselTortuosityConfig:
-    inner_circle: str | None = None
-    outer_circle: str | None = None
+    enabled: bool = True
+    inner_circle: str | None = "2r"
+    outer_circle: str | None = "5r"
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,14 @@ def load_app_config(config_path: str | Path | None = None) -> AppConfig:
     if not isinstance(color_overrides, dict):
         raise ValueError("'overlay.colors' must be a mapping")
 
+    circle_color_overrides = overlay_raw.get(
+        "circle_colors", overlay_raw.get("circle_colours", {})
+    )
+    if circle_color_overrides is None:
+        circle_color_overrides = {}
+    if not isinstance(circle_color_overrides, Mapping):
+        raise ValueError("'overlay.circle_colors' must be a mapping")
+
     vessel_widths_raw = raw_config.get("vessel_widths", {})
     if vessel_widths_raw is None:
         vessel_widths_raw = {}
@@ -173,21 +186,37 @@ def load_app_config(config_path: str | Path | None = None) -> AppConfig:
     if not isinstance(vessel_tortuosities_raw, dict):
         raise ValueError("'vessel_tortuosities' must be a mapping")
 
-    raw_circles = overlay_raw.get("circles", None)
-    if raw_circles is None:
-        circles = default_overlay_circles()
-    else:
-        circles = _build_overlay_circles(raw_circles)
+    unsupported_overlay_keys = set(overlay_raw) - {
+        "enabled",
+        "layers",
+        "colors",
+        "colours",
+        "circle_colors",
+        "circle_colours",
+    }
+    if unsupported_overlay_keys:
+        unsupported = ", ".join(sorted(str(key) for key in unsupported_overlay_keys))
+        raise ValueError(f"Unsupported keys in 'overlay': {unsupported}")
+
+    overlay_layers = _build_overlay_layers(layer_overrides)
+    vessel_widths = _build_vessel_width_config(vessel_widths_raw)
+    vessel_tortuosities = _build_vessel_tortuosity_config(vessel_tortuosities_raw)
+    overlay_colors = _build_overlay_colors(color_overrides)
+    circles = _derive_overlay_circles(
+        vessel_widths,
+        vessel_tortuosities,
+        circle_color_overrides=_build_overlay_circle_colors(circle_color_overrides),
+    )
 
     return AppConfig(
         overlay=OverlayConfig(
             enabled=_coerce_bool(overlay_raw.get("enabled", True), "overlay.enabled"),
-            layers=_build_overlay_layers(layer_overrides),
-            colors=_build_overlay_colors(color_overrides),
+            layers=overlay_layers,
+            colors=overlay_colors,
             circles=circles,
         ),
-        vessel_widths=_build_vessel_width_config(vessel_widths_raw),
-        vessel_tortuosities=_build_vessel_tortuosity_config(vessel_tortuosities_raw),
+        vessel_widths=vessel_widths,
+        vessel_tortuosities=vessel_tortuosities,
         source_path=resolved_path,
     )
 
@@ -201,10 +230,9 @@ def _build_overlay_layers(raw_layers: Mapping[str, object]) -> OverlayLayers:
         "veins": "veins",
         "disc": "disc",
         "fovea": "fovea",
-        "vessel_width": "vessel_widths",
-        "vessel_widths": "vessel_widths",
     }
     values = defaults.__dict__.copy()
+    values["vessel_widths"] = False
     for raw_key, raw_value in raw_layers.items():
         if raw_key not in alias_map:
             raise ValueError(f"Unsupported overlay layer '{raw_key}'")
@@ -236,52 +264,84 @@ def _build_overlay_colors(raw_colors: Mapping[str, object]) -> OverlayColors:
     return OverlayColors(**values)
 
 
-def _build_overlay_circles(raw_circles: object) -> tuple[OverlayCircle, ...]:
-    if not isinstance(raw_circles, list):
-        raise ValueError("'overlay.circles' must be a list")
-
-    circles: list[OverlayCircle] = []
-    seen_names: set[str] = set()
-    for index, raw_circle in enumerate(raw_circles):
-        field_name = f"overlay.circles[{index}]"
-        if not isinstance(raw_circle, Mapping):
-            raise ValueError(f"'{field_name}' must be a mapping")
-
-        unsupported_keys = set(raw_circle) - {"name", "diameter", "color", "colour"}
-        if unsupported_keys:
-            unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
-            raise ValueError(f"Unsupported keys in '{field_name}': {unsupported}")
-
-        if "name" not in raw_circle:
-            raise ValueError(f"'{field_name}.name' is required")
-        if "diameter" not in raw_circle:
-            raise ValueError(f"'{field_name}.diameter' is required")
-
-        circle_name = _coerce_circle_name(raw_circle["name"], f"{field_name}.name")
-        if circle_name in seen_names:
-            raise ValueError(
-                f"Duplicate circle name '{circle_name}' in overlay.circles"
-            )
-
-        raw_color = raw_circle.get("color", raw_circle.get("colour", (0, 0, 0)))
-        circles.append(
-            OverlayCircle(
-                name=circle_name,
-                diameter=_coerce_positive_float(
-                    raw_circle["diameter"], f"{field_name}.diameter"
-                ),
-                color=_parse_rgb(raw_color, f"{field_name}.color"),
-            )
+def _build_overlay_circle_colors(
+    raw_circle_colors: Mapping[str, object],
+) -> dict[str, tuple[int, int, int]]:
+    circle_colors: dict[str, tuple[int, int, int]] = {}
+    for raw_key, raw_value in raw_circle_colors.items():
+        circle_name = _coerce_circle_name(raw_key, "overlay.circle_colors")
+        circle_colors[circle_name] = _parse_rgb(
+            raw_value, f"overlay.circle_colors.{circle_name}"
         )
-        seen_names.add(circle_name)
+    return circle_colors
 
-    return tuple(circles)
+
+def _derive_overlay_circles(
+    vessel_widths: VesselWidthConfig,
+    vessel_tortuosities: VesselTortuosityConfig,
+    circle_color_overrides: Mapping[str, tuple[int, int, int]] | None = None,
+) -> tuple[OverlayCircle, ...]:
+    circles_by_name: dict[str, OverlayCircle] = {}
+    circle_color_overrides = circle_color_overrides or {}
+    for section_enabled, field_name, circle_name in (
+        (
+            vessel_widths.enabled,
+            "vessel_widths.inner_circle",
+            vessel_widths.inner_circle,
+        ),
+        (
+            vessel_widths.enabled,
+            "vessel_widths.outer_circle",
+            vessel_widths.outer_circle,
+        ),
+        (
+            vessel_tortuosities.enabled,
+            "vessel_tortuosities.inner_circle",
+            vessel_tortuosities.inner_circle,
+        ),
+        (
+            vessel_tortuosities.enabled,
+            "vessel_tortuosities.outer_circle",
+            vessel_tortuosities.outer_circle,
+        ),
+    ):
+        if not section_enabled or circle_name is None:
+            continue
+        normalized_name = _coerce_circle_name(circle_name, field_name)
+        circles_by_name.setdefault(
+            normalized_name,
+            OverlayCircle(
+                name=normalized_name,
+                diameter=_circle_name_to_diameter(normalized_name, field_name),
+                color=circle_color_overrides.get(
+                    normalized_name, DEFAULT_DERIVED_CIRCLE_COLOR
+                ),
+            ),
+        )
+
+    unknown_circle_colors = sorted(
+        set(circle_color_overrides).difference(circles_by_name)
+    )
+    if unknown_circle_colors:
+        unknown = ", ".join(unknown_circle_colors)
+        raise ValueError(
+            "overlay.circle_colors contains entries for disabled or undefined circles: "
+            f"{unknown}"
+        )
+
+    circles = tuple(
+        sorted(
+            circles_by_name.values(), key=lambda circle: (circle.diameter, circle.name)
+        )
+    )
+    return circles
 
 
 def _build_vessel_width_config(
     raw_vessel_widths: Mapping[str, object],
 ) -> VesselWidthConfig:
     unsupported_keys = set(raw_vessel_widths) - {
+        "enabled",
         "inner_circle",
         "outer_circle",
         "samples_per_connection",
@@ -306,11 +366,17 @@ def _build_vessel_width_config(
         raise ValueError("'vessel_widths.profile' must be a mapping")
 
     return VesselWidthConfig(
+        enabled=_coerce_bool(
+            raw_vessel_widths.get("enabled", True),
+            "vessel_widths.enabled",
+        ),
         inner_circle=_coerce_optional_string(
-            raw_vessel_widths.get("inner_circle"), "vessel_widths.inner_circle"
+            raw_vessel_widths.get("inner_circle", "2r"),
+            "vessel_widths.inner_circle",
         ),
         outer_circle=_coerce_optional_string(
-            raw_vessel_widths.get("outer_circle"), "vessel_widths.outer_circle"
+            raw_vessel_widths.get("outer_circle", "3r"),
+            "vessel_widths.outer_circle",
         ),
         samples_per_connection=_coerce_nonzero_int(
             raw_vessel_widths.get("samples_per_connection", 5),
@@ -330,6 +396,7 @@ def _build_vessel_tortuosity_config(
     raw_vessel_tortuosities: Mapping[str, object],
 ) -> VesselTortuosityConfig:
     unsupported_keys = set(raw_vessel_tortuosities) - {
+        "enabled",
         "inner_circle",
         "outer_circle",
     }
@@ -338,15 +405,28 @@ def _build_vessel_tortuosity_config(
         raise ValueError(f"Unsupported keys in 'vessel_tortuosities': {unsupported}")
 
     return VesselTortuosityConfig(
+        enabled=_coerce_bool(
+            raw_vessel_tortuosities.get("enabled", True),
+            "vessel_tortuosities.enabled",
+        ),
         inner_circle=_coerce_optional_string(
-            raw_vessel_tortuosities.get("inner_circle"),
+            raw_vessel_tortuosities.get("inner_circle", "2r"),
             "vessel_tortuosities.inner_circle",
         ),
         outer_circle=_coerce_optional_string(
-            raw_vessel_tortuosities.get("outer_circle"),
+            raw_vessel_tortuosities.get("outer_circle", "5r"),
             "vessel_tortuosities.outer_circle",
         ),
     )
+
+
+def _circle_name_to_diameter(circle_name: str, field_name: str) -> float:
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)r", circle_name)
+    if match is None:
+        raise ValueError(
+            f"'{field_name}' must use the '<multiplier>r' format, for example '2r' or '3.5r'"
+        )
+    return _coerce_positive_float(float(match.group(1)), field_name)
 
 
 def _build_pvbm_mask_width_config(

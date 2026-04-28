@@ -16,12 +16,6 @@ def test_load_app_config_accepts_aliases_and_colours(tmp_path: Path) -> None:
                 "    artery: false",
                 "  colours:",
                 "    veins: '#112233'",
-                "  circles:",
-                "    - name: inner",
-                "      diameter: 1.5",
-                "    - name: outer",
-                "      diameter: 2.5",
-                "      colour: [4, 5, 6]",
             ]
         ),
         encoding="utf-8",
@@ -32,14 +26,15 @@ def test_load_app_config_accepts_aliases_and_colours(tmp_path: Path) -> None:
     assert app_config.source_path == config_path
     assert app_config.overlay.enabled is False
     assert app_config.overlay.layers.arteries is False
-    assert app_config.overlay.layers.vessel_widths is True
+    assert app_config.overlay.layers.vessel_widths is False
     assert app_config.overlay.colors.vein == (17, 34, 51)
     assert app_config.overlay.colors.vessel == (255, 255, 255)
     assert app_config.overlay.colors.vessel_width == (0, 0, 0)
-    assert [circle.name for circle in app_config.overlay.circles] == ["inner", "outer"]
-    assert [circle.diameter for circle in app_config.overlay.circles] == [1.5, 2.5]
-    assert app_config.overlay.circles[0].color == (0, 0, 0)
-    assert app_config.overlay.circles[1].color == (4, 5, 6)
+    assert [circle.name for circle in app_config.overlay.circles] == ["2r", "3r", "5r"]
+    assert [circle.diameter for circle in app_config.overlay.circles] == [2.0, 3.0, 5.0]
+    assert app_config.overlay.circles[0].color == (0, 255, 0)
+    assert app_config.vessel_widths.enabled is True
+    assert app_config.vessel_tortuosities.enabled is True
     assert app_config.vessel_widths.samples_per_connection == 5
 
 
@@ -60,7 +55,7 @@ def test_load_app_config_rejects_unknown_layer(tmp_path: Path) -> None:
         load_app_config(config_path)
 
 
-def test_load_app_config_rejects_duplicate_circle_names(tmp_path: Path) -> None:
+def test_load_app_config_rejects_overlay_circle_declarations(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -69,14 +64,12 @@ def test_load_app_config_rejects_duplicate_circle_names(tmp_path: Path) -> None:
                 "  circles:",
                 "    - name: repeated",
                 "      diameter: 2.0",
-                "    - name: repeated",
-                "      diameter: 3.0",
             ]
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Duplicate circle name"):
+    with pytest.raises(ValueError, match="Unsupported keys in 'overlay': circles"):
         load_app_config(config_path)
 
 
@@ -86,16 +79,19 @@ def test_load_app_config_accepts_vessel_width_sampling_options(tmp_path: Path) -
         "\n".join(
             [
                 "overlay:",
-                "  layers:",
-                "    vessel_widths: false",
                 "  colours:",
                 "    vessel: '#0A0B0C'",
                 "    vessel_widths: [1, 2, 3]",
+                "  circle_colours:",
+                "    3r: '#112233'",
+                "    5r: [4, 5, 6]",
                 "vessel_widths:",
+                "  enabled: false",
                 "  inner_circle: 2r",
                 "  outer_circle: 3r",
                 "  samples_per_connection: 4",
                 "vessel_tortuosities:",
+                "  enabled: true",
                 "  inner_circle: 3r",
                 "  outer_circle: 5r",
             ]
@@ -108,12 +104,72 @@ def test_load_app_config_accepts_vessel_width_sampling_options(tmp_path: Path) -
     assert app_config.overlay.layers.vessel_widths is False
     assert app_config.overlay.colors.vessel == (10, 11, 12)
     assert app_config.overlay.colors.vessel_width == (1, 2, 3)
+    assert app_config.vessel_widths.enabled is False
     assert app_config.vessel_widths.inner_circle == "2r"
     assert app_config.vessel_widths.outer_circle == "3r"
     assert app_config.vessel_widths.samples_per_connection == 4
     assert app_config.vessel_widths.method == "mask"
+    assert app_config.vessel_tortuosities.enabled is True
     assert app_config.vessel_tortuosities.inner_circle == "3r"
     assert app_config.vessel_tortuosities.outer_circle == "5r"
+    assert [circle.name for circle in app_config.overlay.circles] == ["3r", "5r"]
+    assert [circle.color for circle in app_config.overlay.circles] == [
+        (17, 34, 51),
+        (4, 5, 6),
+    ]
+
+
+def test_load_app_config_skips_all_circles_when_metrics_disabled(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  enabled: false",
+                "vessel_tortuosities:",
+                "  enabled: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app_config = load_app_config(config_path)
+
+    assert app_config.overlay.circles == ()
+
+
+def test_load_app_config_rejects_unused_circle_colour(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "overlay:",
+                "  circle_colours:",
+                "    7r: '#123456'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="overlay.circle_colors contains entries"):
+        load_app_config(config_path)
+
+
+def test_load_app_config_rejects_non_derived_circle_name(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  inner_circle: inner",
+                "  outer_circle: 3r",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must use the '<multiplier>r' format"):
+        load_app_config(config_path)
 
 
 def test_load_app_config_accepts_profile_width_options(tmp_path: Path) -> None:

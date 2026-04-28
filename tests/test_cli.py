@@ -163,24 +163,17 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
         "\n".join(
             [
                 "overlay:",
-                "  layers:",
-                "    vessel_widths: false",
                 "  colours:",
                 "    artery: '#AA0000'",
                 "    vein: '#0000BB'",
                 "    vessel: '#00CC00'",
                 "    disc: '#DDDDDD'",
-                "  circles:",
-                "    - name: 2r",
-                "      diameter: 2.0",
-                "      color: '#00FF00'",
-                "    - name: 3r",
-                "      diameter: 3.0",
-                "      color: '#00FF00'",
-                "    - name: 5r",
-                "      diameter: 5.0",
-                "      color: '#00FF00'",
+                "  circle_colours:",
+                "    2r: '#123456'",
+                "    3r: '#654321'",
+                "    5r: '#ABCDEF'",
                 "vessel_widths:",
+                "  enabled: true",
                 "  inner_circle: 2r",
                 "  outer_circle: 3r",
                 "  samples_per_connection: 4",
@@ -189,6 +182,7 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
                 "    image_source: preprocessed_rgb",
                 "    fallback_to_mask: true",
                 "vessel_tortuosities:",
+                "  enabled: true",
                 "  inner_circle: 2r",
                 "  outer_circle: 5r",
             ]
@@ -232,7 +226,7 @@ def test_cli_run_passes_measurement_config_and_data_to_overlays(
     assert calls["measure_vessel_widths"]["width_config"].method == "profile"
     assert calls["measure_vessel_widths"]["rgb_dir"] == output_dir / "preprocessed_rgb"
     assert calls["generate_disc_circles"]["circles"][0].name == "2r"
-    assert calls["generate_disc_circles"]["circles"][0].color == (0, 255, 0)
+    assert calls["generate_disc_circles"]["circles"][0].color == (18, 52, 86)
     overlay_calls = calls["batch_create_overlays"]
     assert len(overlay_calls) == 3
     assert overlay_calls[0]["output_dir"] == output_dir / "overlays"
@@ -444,16 +438,16 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
             [
                 "overlay:",
                 "  enabled: true",
-                "  circles:",
-                "    - name: 2r",
-                "      diameter: 2.0",
-                "    - name: 3r",
-                "      diameter: 3.0",
                 "vessel_widths:",
+                "  enabled: true",
                 "  inner_circle: 2r",
                 "  outer_circle: 3r",
                 "  samples_per_connection: 4",
                 "  method: profile",
+                "vessel_tortuosities:",
+                "  enabled: true",
+                "  inner_circle: 2r",
+                "  outer_circle: 3r",
             ]
         ),
         encoding="utf-8",
@@ -521,6 +515,93 @@ def test_cli_vessel_metrics_copies_source_output_and_writes_outputs(
     equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
     assert equivalents.iloc[0]["metric"] == "CRAE"
     assert "mean_tortuosity_used" not in equivalents.columns
+
+
+def test_cli_run_skips_disabled_metric_sections(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    Image.new("RGB", (32, 32), color=(0, 0, 0)).save(input_dir / "sample.png")
+
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "vascx_models.cli.available_device_types",
+        lambda: {"cuda": False, "mps": False, "cpu": True},
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.resolve_device",
+        lambda _device_name: torch.device("cpu"),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_segmentation_vessels_and_av",
+        lambda **kwargs: calls.setdefault("run_segmentation_vessels_and_av", kwargs),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_segmentation_disc",
+        lambda **kwargs: calls.setdefault("run_segmentation_disc", kwargs),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_quality_estimation", lambda **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.run_fovea_detection", lambda **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.generate_disc_circles",
+        lambda **kwargs: calls.setdefault("generate_disc_circles", kwargs),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.measure_vessel_widths_between_disc_circle_pair",
+        lambda **kwargs: calls.setdefault("measure_vessel_widths", kwargs),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.measure_vessel_tortuosities_between_disc_circle_pair",
+        lambda **kwargs: calls.setdefault("measure_vessel_tortuosities", kwargs),
+    )
+    monkeypatch.setattr(
+        "vascx_models.cli.batch_create_overlays",
+        lambda **kwargs: calls.setdefault("batch_create_overlays", []).append(kwargs),
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "vessel_widths:",
+                "  enabled: false",
+                "vessel_tortuosities:",
+                "  enabled: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            str(input_dir),
+            str(output_dir),
+            "--config",
+            str(config_path),
+            "--no-preprocess",
+            "--overlay",
+            "--vessels",
+            "--disc",
+            "--no-quality",
+            "--no-fovea",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "generate_disc_circles" not in calls
+    assert "measure_vessel_widths" not in calls
+    assert "measure_vessel_tortuosities" not in calls
+    assert len(calls["batch_create_overlays"]) == 1
+    assert calls["batch_create_overlays"][0]["output_dir"] == output_dir / "overlays"
 
 
 def test_cli_vessel_metrics_uses_timestamped_output_when_omitted(
