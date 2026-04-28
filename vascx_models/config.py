@@ -88,6 +88,7 @@ class ProfileWidthConfig:
     mask_guardrail_min_ratio: float = 0.4
     mask_guardrail_max_ratio: float = 2.5
     fallback_to_mask: bool = False
+    tangent_window_px: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,7 @@ def _build_profile_width_config(
         "mask_guardrail_min_ratio",
         "mask_guardrail_max_ratio",
         "fallback_to_mask",
+        "tangent_window_px",
     }
     if unsupported_keys:
         unsupported = ", ".join(sorted(str(key) for key in unsupported_keys))
@@ -433,6 +435,10 @@ def _build_profile_width_config(
         fallback_to_mask=_coerce_bool(
             raw_profile.get("fallback_to_mask", False),
             "vessel_widths.profile.fallback_to_mask",
+        ),
+        tangent_window_px=_coerce_positive_float(
+            raw_profile.get("tangent_window_px", 10.0),
+            "vessel_widths.profile.tangent_window_px",
         ),
     )
 

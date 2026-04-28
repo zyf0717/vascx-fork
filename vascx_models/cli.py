@@ -263,6 +263,8 @@ def _compute_and_save_vessel_metrics(
                 output_path=vessel_widths_path,
                 tortuosity_output_path=vessel_tortuosities_path,
                 samples_per_connection=app_config.vessel_widths.samples_per_connection,
+                tangent_window_px=app_config.vessel_widths.profile.tangent_window_px,
+                measurement_step_px=app_config.vessel_widths.profile.sample_step_px,
                 width_config=app_config.vessel_widths,
                 rgb_dir=rgb_dir,
             )

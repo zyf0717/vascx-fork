@@ -43,3 +43,4 @@ vessel_widths:
     mask_guardrail_min_ratio: 0.4
     mask_guardrail_max_ratio: 2.5
     fallback_to_mask: false
+    tangent_window_px: 10.0
