@@ -1,14 +1,12 @@
 import logging
-import shutil
 import warnings
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 import click
-import pandas as pd
 from rtnls_fundusprep.cli import _run_preprocessing
 
+from . import pipeline as pipeline_ops
 from .config import load_app_config
 from .disc_circles import generate_disc_circles
 from .runtime import configure_runtime_environment
@@ -37,9 +35,6 @@ from .vessel_widths import (
 
 logger = logging.getLogger(__name__)
 
-VESSEL_METRIC_INTERMEDIATE_DIRS = ("vessels", "artery_vein")
-VESSEL_METRIC_INTERMEDIATE_FILES = ("disc_geometry.csv",)
-
 
 def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -54,487 +49,29 @@ def configure_logging() -> None:
     )
 
 
-def _ensure_empty_or_new_output_dir(output_path: Path) -> None:
-    if output_path.exists() and any(output_path.iterdir()):
-        raise click.ClickException(
-            f"Output path already exists and is not empty: {output_path}"
-        )
-    output_path.mkdir(exist_ok=True, parents=True)
-
-
 def _default_timestamped_output_path(base_dir: Path | None = None) -> Path:
     parent = Path.cwd() if base_dir is None else base_dir
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return parent / f"output_{timestamp}"
 
 
-def _copy_pipeline_output_for_vessel_metrics(
-    source_output_path: Path,
-    output_path: Path,
-) -> tuple[Path, Path, Path]:
-    missing: list[str] = []
-    for dirname in VESSEL_METRIC_INTERMEDIATE_DIRS:
-        if not (source_output_path / dirname).is_dir():
-            missing.append(dirname)
-    for filename in VESSEL_METRIC_INTERMEDIATE_FILES:
-        if not (source_output_path / filename).is_file():
-            missing.append(filename)
-    if missing:
-        raise click.ClickException(
-            "Missing required intermediate output(s): " + ", ".join(missing)
-        )
-
-    for item in source_output_path.iterdir():
-        destination = output_path / item.name
-        if item.is_dir():
-            shutil.copytree(item, destination)
-        else:
-            shutil.copy2(item, destination)
-
-    return (
-        output_path / "vessels",
-        output_path / "artery_vein",
-        output_path / "disc_geometry.csv",
-    )
-
-
-def _resolve_vessel_width_rgb_dir(output_path: Path, image_source: str) -> Path:
-    candidate = Path(image_source).expanduser()
-    if candidate.is_absolute():
-        return candidate
-    return output_path / candidate
-
-
-def _load_fovea_overlay_data(fovea_path: Path) -> dict[str, tuple[int, int]] | None:
-    if not fovea_path.exists():
-        return None
-
-    df_fovea = pd.read_csv(fovea_path, index_col=0)
-    if df_fovea.empty:
-        return None
-
-    return {
-        str(image_id): (int(row["x_fovea"]), int(row["y_fovea"]))
-        for image_id, row in df_fovea.iterrows()
-    }
-
-
-def _remove_metric_outputs(
-    output_path: Path,
-    width_enabled: bool,
-    tortuosity_enabled: bool,
-) -> None:
-    if not width_enabled:
-        width_paths = (
-            output_path / "vessel_widths.csv",
-            output_path / "vessel_equivalents.csv",
-            output_path / "vessel_width_overlays",
-        )
-        for path in width_paths:
-            if path.is_dir():
-                shutil.rmtree(path)
-            elif path.exists():
-                path.unlink()
-
-    if not tortuosity_enabled:
-        tort_paths = (
-            output_path / "vessel_tortuosities.csv",
-            output_path / "vessel_tortuosity_summary.csv",
-            output_path / "vessel_tortuosity_overlays",
-        )
-        for path in tort_paths:
-            if path.is_dir():
-                shutil.rmtree(path)
-            elif path.exists():
-                path.unlink()
-
-
-def _overlay_circle_dirs(output_path: Path, circles) -> dict[str, Path]:
-    disc_circles_dir = output_path / "disc_circles"
-    return {
-        circle.name: disc_circles_dir / circle.name
-        for circle in circles
-        if (disc_circles_dir / circle.name).is_dir()
-    }
-
-
-def _overlay_config_with_selected_circles(overlay_config, circle_names):
-    selected_circle_names = set(circle_names)
-    return replace(
-        overlay_config,
-        circles=tuple(
-            circle
-            for circle in overlay_config.circles
-            if circle.name in selected_circle_names
-        ),
-    )
-
-
-def _tortuosity_overlay_config(overlay_config):
-    return replace(
-        overlay_config,
-        layers=replace(
-            overlay_config.layers,
-            arteries=True,
-            veins=True,
-            disc=True,
-            fovea=True,
-            vessel_widths=False,
-        ),
-        colors=replace(overlay_config.colors, vessel=(0, 255, 0)),
-    )
-
-
-def _width_overlay_config(overlay_config):
-    return replace(
-        overlay_config,
-        layers=replace(overlay_config.layers, vessel_widths=True),
-    )
-
-
-def _render_metric_overlays(
-    output_path: Path,
-    rgb_dir: Path,
-    overlay_config,
-    width_circle_names: tuple[str, str] | None,
-    tortuosity_circle_names: tuple[str, str] | None,
-    av_dir: Path | None,
-    disc_dir: Path | None,
-    vessels_dir: Path,
-    df_vessel_widths: pd.DataFrame | None,
-    df_vessel_tortuosities: pd.DataFrame | None,
-    df_selected_equivalent_widths: pd.DataFrame | None,
-    fovea_data: dict[str, tuple[int, int]] | None,
-) -> None:
-    circle_dirs = _overlay_circle_dirs(output_path, overlay_config.circles)
-    width_overlay_config = (
-        _width_overlay_config(
-            _overlay_config_with_selected_circles(overlay_config, width_circle_names)
-        )
-        if width_circle_names is not None
-        else _width_overlay_config(overlay_config)
-    )
-    width_circle_dirs = _overlay_circle_dirs(output_path, width_overlay_config.circles)
-    tortuosity_overlay_config = (
-        _tortuosity_overlay_config(
-            _overlay_config_with_selected_circles(
-                overlay_config,
-                tortuosity_circle_names,
-            )
-        )
-        if tortuosity_circle_names is not None
-        else _tortuosity_overlay_config(overlay_config)
-    )
-    tortuosity_circle_dirs = _overlay_circle_dirs(
-        output_path,
-        tortuosity_overlay_config.circles,
-    )
-
-    batch_create_overlays(
-        rgb_dir=rgb_dir,
-        output_dir=output_path / "overlays",
-        av_dir=av_dir,
-        disc_dir=disc_dir,
-        vessels_dir=vessels_dir,
-        circle_dirs=circle_dirs,
-        vessel_width_data=df_vessel_widths,
-        fovea_data=fovea_data,
-        overlay_config=overlay_config,
-    )
-
-    if df_vessel_tortuosities is not None:
-        batch_create_overlays(
-            rgb_dir=rgb_dir,
-            output_dir=output_path / "vessel_tortuosity_overlays",
-            av_dir=av_dir,
-            disc_dir=disc_dir,
-            vessels_dir=vessels_dir,
-            circle_dirs=tortuosity_circle_dirs,
-            tortuosity_data=df_vessel_tortuosities,
-            fovea_data=fovea_data,
-            overlay_config=tortuosity_overlay_config,
-        )
-        logger.info(
-            "Vessel tortuosity overlays saved to %s",
-            output_path / "vessel_tortuosity_overlays",
-        )
-
-    if df_selected_equivalent_widths is not None:
-        batch_create_overlays(
-            rgb_dir=rgb_dir,
-            output_dir=output_path / "vessel_width_overlays",
-            av_dir=av_dir,
-            disc_dir=disc_dir,
-            vessels_dir=vessels_dir,
-            circle_dirs=width_circle_dirs,
-            vessel_width_data=df_selected_equivalent_widths,
-            fovea_data=fovea_data,
-            overlay_config=width_overlay_config,
-        )
-        logger.info(
-            "Vessel width overlays saved to %s",
-            output_path / "vessel_width_overlays",
-        )
-
-
-def _refresh_vessel_metric_disc_artifacts(
-    output_path: Path,
-    config_path: Path | None = None,
-) -> None:
-    disc_circles_dir = output_path / "disc_circles"
-    if disc_circles_dir.exists():
-        shutil.rmtree(disc_circles_dir)
-
-    try:
-        app_config = load_app_config(config_path)
-    except (FileNotFoundError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    disc_dir = output_path / "disc"
-    if not disc_dir.is_dir():
-        logger.warning(
-            "Skipping disc circle regeneration because %s is missing",
-            disc_dir,
-        )
-        return
-
-    if not app_config.overlay.circles:
-        logger.info(
-            "Skipping disc circle regeneration because no enabled metric uses circles"
-        )
-        return
-
-    generate_disc_circles(
-        disc_dir=disc_dir,
-        circle_output_dir=disc_circles_dir,
-        circles=app_config.overlay.circles,
-        measurements_path=output_path / "disc_geometry.csv",
-    )
-    logger.info("Disc circle regeneration complete in %s", output_path)
-
-
-def _refresh_vessel_metric_overlays(
-    output_path: Path,
-    df_vessel_widths: pd.DataFrame,
-    df_vessel_tortuosities: pd.DataFrame,
-    df_connection_widths: pd.DataFrame,
-    config_path: Path | None = None,
-) -> None:
-    overlay_path = output_path / "overlays"
-    vessel_width_overlay_path = output_path / "vessel_width_overlays"
-    vessel_tortuosity_overlay_path = output_path / "vessel_tortuosity_overlays"
-    for overlay_dir in (
-        overlay_path,
-        vessel_width_overlay_path,
-        vessel_tortuosity_overlay_path,
-    ):
-        if overlay_dir.exists():
-            shutil.rmtree(overlay_dir)
-
-    try:
-        app_config = load_app_config(config_path)
-    except (FileNotFoundError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if not app_config.overlay.enabled:
-        logger.info("Skipping overlay regeneration because overlays are disabled")
-        return
-
-    rgb_dir = output_path / "preprocessed_rgb"
-    if not rgb_dir.is_dir():
-        logger.warning(
-            "Skipping overlay regeneration because %s is missing",
-            rgb_dir,
-        )
-        return
-
-    disc_dir = output_path / "disc"
-    fovea_data = _load_fovea_overlay_data(output_path / "fovea.csv")
-
-    df_selected_equivalent_widths = None
-    if df_vessel_widths is not None and df_connection_widths is not None:
-        df_selected_equivalent_widths = (
-            select_vessel_width_measurements_for_equivalents(
-                df_vessel_widths,
-                df_connection_widths,
-            )
-        )
-    _render_metric_overlays(
-        output_path=output_path,
-        rgb_dir=rgb_dir,
-        overlay_config=app_config.overlay,
-        width_circle_names=(
-            (
-                app_config.vessel_widths.inner_circle,
-                app_config.vessel_widths.outer_circle,
-            )
-            if app_config.vessel_widths.enabled
-            and app_config.vessel_widths.inner_circle is not None
-            and app_config.vessel_widths.outer_circle is not None
-            else None
-        ),
-        tortuosity_circle_names=(
-            (
-                app_config.vessel_tortuosities.inner_circle,
-                app_config.vessel_tortuosities.outer_circle,
-            )
-            if app_config.vessel_tortuosities.enabled
-            and app_config.vessel_tortuosities.inner_circle is not None
-            and app_config.vessel_tortuosities.outer_circle is not None
-            else None
-        ),
-        av_dir=output_path / "artery_vein",
-        disc_dir=disc_dir if disc_dir.is_dir() else None,
-        vessels_dir=output_path / "vessels",
-        df_vessel_widths=df_vessel_widths,
-        df_vessel_tortuosities=df_vessel_tortuosities,
-        df_selected_equivalent_widths=df_selected_equivalent_widths,
-        fovea_data=fovea_data,
-    )
-    logger.info("Overlay regeneration complete in %s", output_path)
-
-
-def _compute_and_save_vessel_metrics(
-    vessels_path: Path,
-    av_path: Path,
-    disc_geometry_path: Path,
-    output_path: Path,
-    config_path: Path | None = None,
-) -> tuple[
-    pd.DataFrame | None,
-    pd.DataFrame | None,
-    pd.DataFrame | None,
-    pd.DataFrame | None,
-    pd.DataFrame | None,
-]:
-    try:
-        app_config = load_app_config(config_path)
-        width_inner_circle = width_outer_circle = None
-        tortuosity_inner_circle = tortuosity_outer_circle = None
-        if app_config.vessel_widths.enabled:
-            width_inner_circle, width_outer_circle = resolve_vessel_width_circle_pair(
-                app_config.overlay.circles,
-                inner_circle_name=app_config.vessel_widths.inner_circle,
-                outer_circle_name=app_config.vessel_widths.outer_circle,
-            )
-        if app_config.vessel_tortuosities.enabled:
-            tortuosity_inner_circle, tortuosity_outer_circle = (
-                resolve_vessel_width_circle_pair(
-                    app_config.overlay.circles,
-                    inner_circle_name=app_config.vessel_tortuosities.inner_circle,
-                    outer_circle_name=app_config.vessel_tortuosities.outer_circle,
-                )
-            )
-    except (FileNotFoundError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    _remove_metric_outputs(
-        output_path,
-        width_enabled=app_config.vessel_widths.enabled,
-        tortuosity_enabled=app_config.vessel_tortuosities.enabled,
-    )
-
-    if (
-        not app_config.vessel_widths.enabled
-        and not app_config.vessel_tortuosities.enabled
-    ):
-        logger.info(
-            "Skipping vessel width and tortuosity metrics because both are disabled"
-        )
-        return (None, None, None, None, None)
-
-    rgb_dir = None
-    if (
-        app_config.vessel_widths.enabled
-        and app_config.vessel_widths.method == "profile"
-    ):
-        rgb_dir = _resolve_vessel_width_rgb_dir(
-            output_path,
-            app_config.vessel_widths.profile.image_source,
-        )
-
-    vessel_widths_path = output_path / "vessel_widths.csv"
-    vessel_tortuosities_path = output_path / "vessel_tortuosities.csv"
-    vessel_tortuosity_summary_path = output_path / "vessel_tortuosity_summary.csv"
-    vessel_equivalents_path = output_path / "vessel_equivalents.csv"
-
-    df_vessel_widths = None
-    df_connection_widths = None
-    df_vessel_equivalents = None
-    df_vessel_tortuosities = None
-    df_vessel_tortuosity_summary = None
-    try:
-        if app_config.vessel_widths.enabled:
-            logger.info(
-                "Measuring vessel widths between %s and %s with %d samples per connection using %s",
-                width_inner_circle.name,
-                width_outer_circle.name,
-                app_config.vessel_widths.samples_per_connection,
-                app_config.vessel_widths.method,
-            )
-            df_vessel_widths = measure_vessel_widths_between_disc_circle_pair(
-                vessels_dir=vessels_path,
-                av_dir=av_path,
-                disc_geometry_path=disc_geometry_path,
-                inner_circle=width_inner_circle,
-                outer_circle=width_outer_circle,
-                output_path=vessel_widths_path,
-                samples_per_connection=app_config.vessel_widths.samples_per_connection,
-                boundary_tolerance_px=app_config.vessel_widths.boundary_tolerance_px,
-                tangent_window_px=app_config.vessel_widths.mask.tangent_window_px,
-                measurement_step_px=app_config.vessel_widths.mask.measurement_step_px,
-                boundary_refinement_steps=app_config.vessel_widths.mask.boundary_refinement_steps,
-                trace_padding_px=app_config.vessel_widths.mask.trace_padding_px,
-                width_config=app_config.vessel_widths,
-                rgb_dir=rgb_dir,
-            )
-            df_connection_widths, df_vessel_equivalents = (
-                compute_revised_crx_from_widths(df_vessel_widths)
-            )
-            df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
-            logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)
-        else:
-            logger.info(
-                "Skipping vessel width metrics because vessel_widths.enabled is false"
-            )
-
-        if app_config.vessel_tortuosities.enabled:
-            logger.info(
-                "Measuring vessel tortuosities between %s and %s",
-                tortuosity_inner_circle.name,
-                tortuosity_outer_circle.name,
-            )
-            df_vessel_tortuosities = (
-                measure_vessel_tortuosities_between_disc_circle_pair(
-                    vessels_dir=vessels_path,
-                    av_dir=av_path,
-                    disc_geometry_path=disc_geometry_path,
-                    inner_circle=tortuosity_inner_circle,
-                    outer_circle=tortuosity_outer_circle,
-                    output_path=vessel_tortuosities_path,
-                )
-            )
-            df_vessel_tortuosity_summary = summarize_vessel_tortuosities(
-                df_vessel_tortuosities,
-                output_path=vessel_tortuosity_summary_path,
-            )
-            logger.info(
-                "Vessel tortuosity summary saved to %s",
-                vessel_tortuosity_summary_path,
-            )
-        else:
-            logger.info(
-                "Skipping vessel tortuosity metrics because vessel_tortuosities.enabled is false"
-            )
-    except (FileNotFoundError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    return (
-        df_vessel_widths,
-        df_vessel_tortuosities,
-        df_vessel_tortuosity_summary,
-        df_connection_widths,
-        df_vessel_equivalents,
+def _pipeline_dependencies() -> pipeline_ops.PipelineDependencies:
+    return pipeline_ops.PipelineDependencies(
+        available_device_types=available_device_types,
+        resolve_device=resolve_device,
+        run_quality_estimation=run_quality_estimation,
+        run_fovea_detection=run_fovea_detection,
+        run_segmentation_vessels_and_av=run_segmentation_vessels_and_av,
+        run_segmentation_disc=run_segmentation_disc,
+        generate_disc_circles=generate_disc_circles,
+        resolve_vessel_width_circle_pair=resolve_vessel_width_circle_pair,
+        measure_vessel_widths_between_disc_circle_pair=measure_vessel_widths_between_disc_circle_pair,
+        compute_revised_crx_from_widths=compute_revised_crx_from_widths,
+        measure_vessel_tortuosities_between_disc_circle_pair=measure_vessel_tortuosities_between_disc_circle_pair,
+        summarize_vessel_tortuosities=summarize_vessel_tortuosities,
+        select_vessel_width_measurements_for_equivalents=select_vessel_width_measurements_for_equivalents,
+        batch_create_overlays=batch_create_overlays,
+        run_preprocessing=_run_preprocessing,
     )
 
 
@@ -567,54 +104,18 @@ def vessel_metrics(
     Those intermediates are copied into OUTPUT_PATH before metrics are written. When
     OUTPUT_PATH is omitted, a timestamped output_YYYYMMDD_HHMMSS folder is created.
     """
-    source_output_path = source_output_path.resolve()
-    if output_path is None:
-        output_path = _default_timestamped_output_path().resolve()
-    else:
-        output_path = output_path.resolve()
-    if source_output_path == output_path:
-        raise click.ClickException(
-            "OUTPUT_PATH must be different from SOURCE_OUTPUT_PATH"
-        )
     try:
-        output_path.relative_to(source_output_path)
-    except ValueError:
-        pass
-    else:
-        raise click.ClickException("OUTPUT_PATH must not be inside SOURCE_OUTPUT_PATH")
+        app_config = load_app_config(config_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    _ensure_empty_or_new_output_dir(output_path)
-    vessels_path, av_path, disc_geometry_path = (
-        _copy_pipeline_output_for_vessel_metrics(
-            source_output_path=source_output_path,
-            output_path=output_path,
-        )
-    )
-    _refresh_vessel_metric_disc_artifacts(
+    pipeline_ops.run_vessel_metrics_pipeline(
+        source_output_path=source_output_path,
         output_path=output_path,
-        config_path=config_path,
+        app_config=app_config,
+        deps=_pipeline_dependencies(),
+        default_timestamped_output_path=_default_timestamped_output_path,
     )
-    (
-        df_vessel_widths,
-        df_vessel_tortuosities,
-        _,
-        df_connection_widths,
-        _,
-    ) = _compute_and_save_vessel_metrics(
-        vessels_path=vessels_path,
-        av_path=av_path,
-        disc_geometry_path=disc_geometry_path,
-        output_path=output_path,
-        config_path=config_path,
-    )
-    _refresh_vessel_metric_overlays(
-        output_path=output_path,
-        df_vessel_widths=df_vessel_widths,
-        df_vessel_tortuosities=df_vessel_tortuosities,
-        df_connection_widths=df_connection_widths,
-        config_path=config_path,
-    )
-    logger.info("Vessel metrics complete. Results saved to %s", output_path)
 
 
 @cli.command()
@@ -672,266 +173,22 @@ def run(
     DATA_PATH is either a directory containing images or a CSV file with 'path' column.
     OUTPUT_PATH is the directory where results will be stored.
     """
-
-    output_path = Path(output_path)
-    output_path.mkdir(exist_ok=True, parents=True)
     try:
         app_config = load_app_config(config_path)
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-    overlay_enabled = app_config.overlay.enabled if overlay is None else overlay
-    if app_config.source_path is not None:
-        logger.info("Loaded config from %s", app_config.source_path)
 
-    # Setup output directories
-    preprocess_rgb_path = output_path / "preprocessed_rgb"
-    vessels_path = output_path / "vessels"
-    av_path = output_path / "artery_vein"
-    disc_path = output_path / "disc"
-    disc_circles_path = output_path / "disc_circles"
-    overlay_path = output_path / "overlays"
-
-    # Create required directories
-    if preprocess:
-        preprocess_rgb_path.mkdir(exist_ok=True, parents=True)
-    if vessels:
-        av_path.mkdir(exist_ok=True, parents=True)
-        vessels_path.mkdir(exist_ok=True, parents=True)
-    if disc:
-        disc_path.mkdir(exist_ok=True, parents=True)
-        if app_config.overlay.circles:
-            disc_circles_path.mkdir(exist_ok=True, parents=True)
-    if overlay_enabled:
-        overlay_path.mkdir(exist_ok=True, parents=True)
-
-    bounds_path = output_path / "bounds.csv" if preprocess else None
-    quality_path = output_path / "quality.csv" if quality else None
-    fovea_path = output_path / "fovea.csv" if fovea else None
-    disc_geometry_path = output_path / "disc_geometry.csv" if disc else None
-    vessel_widths_path = output_path / "vessel_widths.csv" if disc and vessels else None
-    vessel_tortuosities_path = (
-        output_path / "vessel_tortuosities.csv" if disc and vessels else None
+    pipeline_ops.run_pipeline(
+        data_path=data_path,
+        output_path=output_path,
+        app_config=app_config,
+        deps=_pipeline_dependencies(),
+        preprocess=preprocess,
+        vessels=vessels,
+        disc=disc,
+        quality=quality,
+        fovea=fovea,
+        overlay=overlay,
+        device_name=device_name,
+        n_jobs=n_jobs,
     )
-    vessel_tortuosity_summary_path = (
-        output_path / "vessel_tortuosity_summary.csv" if disc and vessels else None
-    )
-    vessel_equivalents_path = (
-        output_path / "vessel_equivalents.csv" if disc and vessels else None
-    )
-
-    # Determine if input is a folder or CSV file
-    data_path = Path(data_path)
-    is_csv = data_path.suffix.lower() == ".csv"
-
-    # Get files to process
-    files = []
-    ids = None
-
-    if is_csv:
-        logger.info("Reading file paths from CSV: %s", data_path)
-        try:
-            df = pd.read_csv(data_path)
-            if "path" not in df.columns:
-                logger.error("CSV must contain a 'path' column")
-                return
-
-            # Get file paths and convert to Path objects
-            files = [Path(p) for p in df["path"]]
-
-            if "id" in df.columns:
-                ids = df["id"].tolist()
-                logger.info("Using IDs from CSV 'id' column")
-
-        except Exception as e:
-            logger.exception("Error reading CSV file: %s", e)
-            return
-    else:
-        logger.info("Finding files in directory: %s", data_path)
-        files = list(data_path.glob("*"))
-        ids = [f.stem for f in files]
-
-    if not files:
-        logger.warning("No files found to process")
-        return
-
-    logger.info("Found %d files to process", len(files))
-
-    # Step 1: Preprocess images if requested
-    if preprocess:
-        logger.info("Running preprocessing")
-        _run_preprocessing(
-            files=files,
-            ids=ids,
-            rgb_path=preprocess_rgb_path,
-            bounds_path=bounds_path,
-            n_jobs=n_jobs,
-        )
-        # Use the preprocessed images for subsequent steps
-        preprocessed_files = list(preprocess_rgb_path.glob("*.png"))
-    else:
-        # Use the input files directly
-        preprocessed_files = files
-    ids = [f.stem for f in preprocessed_files]
-    logger.info("Prepared %d images for inference", len(preprocessed_files))
-
-    available_devices = available_device_types()
-    logger.info(
-        "Device availability: cuda=%s, mps=%s, cpu=%s",
-        available_devices["cuda"],
-        available_devices["mps"],
-        available_devices["cpu"],
-    )
-    try:
-        device = resolve_device(device_name)
-    except (RuntimeError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    if device_name == "auto":
-        logger.info("Auto-selected device: %s", device)
-    else:
-        logger.info("Using requested device '%s': %s", device_name, device)
-
-    # Step 2: Run quality estimation if requested
-    if quality:
-        logger.info("Running quality estimation")
-        df_quality = run_quality_estimation(
-            fpaths=preprocessed_files, ids=ids, device=device
-        )
-        df_quality.to_csv(quality_path)
-        logger.info("Quality results saved to %s", quality_path)
-
-    # Step 3: Run vessels and AV segmentation if requested
-    if vessels:
-        logger.info("Running vessels and AV segmentation")
-        run_segmentation_vessels_and_av(
-            rgb_paths=preprocessed_files,
-            ids=ids,
-            av_path=av_path,
-            vessels_path=vessels_path,
-            artery_color=app_config.overlay.colors.artery,
-            vein_color=app_config.overlay.colors.vein,
-            vessel_color=app_config.overlay.colors.vessel,
-            device=device,
-        )
-        logger.info("Vessel segmentation saved to %s", vessels_path)
-        logger.info("AV segmentation saved to %s", av_path)
-
-    # Step 4: Run optic disc segmentation if requested
-    if disc:
-        logger.info("Running optic disc segmentation")
-        run_segmentation_disc(
-            rgb_paths=preprocessed_files,
-            ids=ids,
-            output_path=disc_path,
-            disc_color=app_config.overlay.colors.disc,
-            device=device,
-        )
-        logger.info("Disc segmentation saved to %s", disc_path)
-        if app_config.overlay.circles:
-            generate_disc_circles(
-                disc_dir=disc_path,
-                circle_output_dir=disc_circles_path,
-                circles=app_config.overlay.circles,
-                measurements_path=disc_geometry_path,
-            )
-            logger.info("Disc circles saved to %s", disc_circles_path)
-        else:
-            logger.info(
-                "Skipping disc circle generation because width and tortuosity metrics are disabled"
-            )
-
-    # Step 5: Measure width and tortuosity outputs through separate vessel metric flows.
-    df_vessel_widths = None
-    df_vessel_tortuosities = None
-    df_selected_equivalent_widths = None
-    if (
-        disc
-        and vessels
-        and (app_config.vessel_widths.enabled or app_config.vessel_tortuosities.enabled)
-    ):
-        (
-            df_vessel_widths,
-            df_vessel_tortuosities,
-            _,
-            df_connection_widths,
-            _,
-        ) = _compute_and_save_vessel_metrics(
-            vessels_path=vessels_path,
-            av_path=av_path,
-            disc_geometry_path=disc_geometry_path,
-            output_path=output_path,
-            config_path=config_path,
-        )
-        if df_vessel_widths is not None and df_connection_widths is not None:
-            df_selected_equivalent_widths = (
-                select_vessel_width_measurements_for_equivalents(
-                    df_vessel_widths,
-                    df_connection_widths,
-                )
-            )
-        if df_vessel_tortuosities is not None:
-            logger.info(
-                "Vessel tortuosity outputs saved to %s and %s",
-                vessel_tortuosities_path,
-                vessel_tortuosity_summary_path,
-            )
-    elif disc and vessels:
-        logger.info(
-            "Skipping vessel metrics because both vessel_widths.enabled and vessel_tortuosities.enabled are false"
-        )
-
-    # Step 6: Run fovea detection if requested
-    df_fovea = None
-    if fovea:
-        logger.info("Running fovea detection")
-        df_fovea = run_fovea_detection(
-            rgb_paths=preprocessed_files, ids=ids, device=device
-        )
-        df_fovea.to_csv(fovea_path)
-        logger.info("Fovea detection results saved to %s", fovea_path)
-
-    # Step 7: Create overlays if requested
-    if overlay_enabled:
-        logger.info("Creating visualization overlays")
-
-        fovea_data = None
-        if df_fovea is not None:
-            fovea_data = {
-                idx: (row["x_fovea"], row["y_fovea"])
-                for idx, row in df_fovea.iterrows()
-            }
-        _render_metric_overlays(
-            output_path=output_path,
-            rgb_dir=preprocess_rgb_path if preprocess else data_path,
-            overlay_config=app_config.overlay,
-            width_circle_names=(
-                (
-                    app_config.vessel_widths.inner_circle,
-                    app_config.vessel_widths.outer_circle,
-                )
-                if app_config.vessel_widths.enabled
-                and app_config.vessel_widths.inner_circle is not None
-                and app_config.vessel_widths.outer_circle is not None
-                else None
-            ),
-            tortuosity_circle_names=(
-                (
-                    app_config.vessel_tortuosities.inner_circle,
-                    app_config.vessel_tortuosities.outer_circle,
-                )
-                if app_config.vessel_tortuosities.enabled
-                and app_config.vessel_tortuosities.inner_circle is not None
-                and app_config.vessel_tortuosities.outer_circle is not None
-                else None
-            ),
-            av_dir=av_path,
-            disc_dir=disc_path,
-            vessels_dir=vessels_path,
-            df_vessel_widths=df_vessel_widths,
-            df_vessel_tortuosities=df_vessel_tortuosities if disc and vessels else None,
-            df_selected_equivalent_widths=df_selected_equivalent_widths,
-            fovea_data=fovea_data,
-        )
-
-        logger.info("Visualization overlays saved to %s", overlay_path)
-
-    logger.info("All requested processing complete. Results saved to %s", output_path)
