@@ -263,7 +263,9 @@ def _refresh_vessel_metric_disc_artifacts(
         return
 
     if not app_config.overlay.circles:
-        logger.info("Skipping disc circle regeneration because no enabled metric uses circles")
+        logger.info(
+            "Skipping disc circle regeneration because no enabled metric uses circles"
+        )
         return
 
     generate_disc_circles(
@@ -315,9 +317,11 @@ def _refresh_vessel_metric_overlays(
 
     df_selected_equivalent_widths = None
     if df_vessel_widths is not None and df_connection_widths is not None:
-        df_selected_equivalent_widths = select_vessel_width_measurements_for_equivalents(
-            df_vessel_widths,
-            df_connection_widths,
+        df_selected_equivalent_widths = (
+            select_vessel_width_measurements_for_equivalents(
+                df_vessel_widths,
+                df_connection_widths,
+            )
         )
     _render_metric_overlays(
         output_path=output_path,
@@ -358,10 +362,12 @@ def _compute_and_save_vessel_metrics(
                 outer_circle_name=app_config.vessel_widths.outer_circle,
             )
         if app_config.vessel_tortuosities.enabled:
-            tortuosity_inner_circle, tortuosity_outer_circle = resolve_vessel_width_circle_pair(
-                app_config.overlay.circles,
-                inner_circle_name=app_config.vessel_tortuosities.inner_circle,
-                outer_circle_name=app_config.vessel_tortuosities.outer_circle,
+            tortuosity_inner_circle, tortuosity_outer_circle = (
+                resolve_vessel_width_circle_pair(
+                    app_config.overlay.circles,
+                    inner_circle_name=app_config.vessel_tortuosities.inner_circle,
+                    outer_circle_name=app_config.vessel_tortuosities.outer_circle,
+                )
             )
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -372,12 +378,20 @@ def _compute_and_save_vessel_metrics(
         tortuosity_enabled=app_config.vessel_tortuosities.enabled,
     )
 
-    if not app_config.vessel_widths.enabled and not app_config.vessel_tortuosities.enabled:
-        logger.info("Skipping vessel width and tortuosity metrics because both are disabled")
+    if (
+        not app_config.vessel_widths.enabled
+        and not app_config.vessel_tortuosities.enabled
+    ):
+        logger.info(
+            "Skipping vessel width and tortuosity metrics because both are disabled"
+        )
         return (None, None, None, None, None)
 
     rgb_dir = None
-    if app_config.vessel_widths.enabled and app_config.vessel_widths.method == "profile":
+    if (
+        app_config.vessel_widths.enabled
+        and app_config.vessel_widths.method == "profile"
+    ):
         rgb_dir = _resolve_vessel_width_rgb_dir(
             output_path,
             app_config.vessel_widths.profile.image_source,
@@ -415,13 +429,15 @@ def _compute_and_save_vessel_metrics(
                 width_config=app_config.vessel_widths,
                 rgb_dir=rgb_dir,
             )
-            df_connection_widths, df_vessel_equivalents = compute_revised_crx_from_widths(
-                df_vessel_widths
+            df_connection_widths, df_vessel_equivalents = (
+                compute_revised_crx_from_widths(df_vessel_widths)
             )
             df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
             logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)
         else:
-            logger.info("Skipping vessel width metrics because vessel_widths.enabled is false")
+            logger.info(
+                "Skipping vessel width metrics because vessel_widths.enabled is false"
+            )
 
         if app_config.vessel_tortuosities.enabled:
             logger.info(
@@ -429,13 +445,15 @@ def _compute_and_save_vessel_metrics(
                 tortuosity_inner_circle.name,
                 tortuosity_outer_circle.name,
             )
-            df_vessel_tortuosities = measure_vessel_tortuosities_between_disc_circle_pair(
-                vessels_dir=vessels_path,
-                av_dir=av_path,
-                disc_geometry_path=disc_geometry_path,
-                inner_circle=tortuosity_inner_circle,
-                outer_circle=tortuosity_outer_circle,
-                output_path=vessel_tortuosities_path,
+            df_vessel_tortuosities = (
+                measure_vessel_tortuosities_between_disc_circle_pair(
+                    vessels_dir=vessels_path,
+                    av_dir=av_path,
+                    disc_geometry_path=disc_geometry_path,
+                    inner_circle=tortuosity_inner_circle,
+                    outer_circle=tortuosity_outer_circle,
+                    output_path=vessel_tortuosities_path,
+                )
             )
             df_vessel_tortuosity_summary = summarize_vessel_tortuosities(
                 df_vessel_tortuosities,
@@ -758,14 +776,18 @@ def run(
             )
             logger.info("Disc circles saved to %s", disc_circles_path)
         else:
-            logger.info("Skipping disc circle generation because width and tortuosity metrics are disabled")
+            logger.info(
+                "Skipping disc circle generation because width and tortuosity metrics are disabled"
+            )
 
     # Step 5: Measure width and tortuosity outputs through separate vessel metric flows.
     df_vessel_widths = None
     df_vessel_tortuosities = None
     df_selected_equivalent_widths = None
-    if disc and vessels and (
-        app_config.vessel_widths.enabled or app_config.vessel_tortuosities.enabled
+    if (
+        disc
+        and vessels
+        and (app_config.vessel_widths.enabled or app_config.vessel_tortuosities.enabled)
     ):
         (
             df_vessel_widths,
@@ -781,9 +803,11 @@ def run(
             config_path=config_path,
         )
         if df_vessel_widths is not None and df_connection_widths is not None:
-            df_selected_equivalent_widths = select_vessel_width_measurements_for_equivalents(
-                df_vessel_widths,
-                df_connection_widths,
+            df_selected_equivalent_widths = (
+                select_vessel_width_measurements_for_equivalents(
+                    df_vessel_widths,
+                    df_connection_widths,
+                )
             )
         if df_vessel_tortuosities is not None:
             logger.info(
@@ -792,7 +816,9 @@ def run(
                 vessel_tortuosity_summary_path,
             )
     elif disc and vessels:
-        logger.info("Skipping vessel metrics because both vessel_widths.enabled and vessel_tortuosities.enabled are false")
+        logger.info(
+            "Skipping vessel metrics because both vessel_widths.enabled and vessel_tortuosities.enabled are false"
+        )
 
     # Step 6: Run fovea detection if requested
     df_fovea = None

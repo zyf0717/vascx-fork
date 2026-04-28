@@ -119,7 +119,9 @@ def test_load_app_config_accepts_vessel_width_sampling_options(tmp_path: Path) -
     ]
 
 
-def test_load_app_config_skips_all_circles_when_metrics_disabled(tmp_path: Path) -> None:
+def test_load_app_config_skips_all_circles_when_metrics_disabled(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
