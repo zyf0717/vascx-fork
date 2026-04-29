@@ -132,6 +132,47 @@ def test_create_fundus_overlay_draws_tortuosity_skeleton_and_chord(
     assert tuple(output[20, 21]) == (0, 0, 0)
 
 
+def test_create_fundus_overlay_draws_branching_angle_skeleton_and_thin_marker(
+    tmp_path: Path,
+) -> None:
+    rgb_path = tmp_path / "rgb.png"
+    vessel_path = tmp_path / "vessel.png"
+    rgb = np.zeros((40, 40, 3), dtype=np.uint8)
+    Image.fromarray(rgb).save(rgb_path)
+
+    vessel = np.zeros((40, 40), dtype=np.uint8)
+    for offset in range(0, 5):
+        vessel[20 - offset, 20 - offset] = 1
+        vessel[20 - offset, 20 + offset] = 1
+    Image.fromarray(vessel).save(vessel_path)
+
+    output = create_fundus_overlay(
+        rgb_path=str(rgb_path),
+        vessel_path=str(vessel_path),
+        branching_measurements=[
+            {
+                "x_junction": 20.0,
+                "y_junction": 20.0,
+                "daughter_1_angle_x": 16.0,
+                "daughter_1_angle_y": 16.0,
+                "daughter_2_angle_x": 24.0,
+                "daughter_2_angle_y": 16.0,
+            }
+        ],
+        overlay_config=OverlayConfig(
+            colors=OverlayColors(
+                vessel=(0, 255, 0),
+                branch_point=(255, 255, 0),
+            ),
+        ),
+    )
+
+    assert tuple(output[16, 16]) == (0, 255, 0)
+    assert tuple(output[16, 24]) == (0, 255, 0)
+    assert tuple(output[17, 20]) == (255, 255, 0)
+    assert tuple(output[18, 20]) == (0, 0, 0)
+
+
 def test_create_fundus_overlay_draws_tortuosity_on_top_of_other_layers(
     tmp_path: Path,
 ) -> None:

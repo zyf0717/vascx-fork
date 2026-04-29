@@ -140,6 +140,46 @@ def _rasterize_tortuosity_skeleton_segments(
     return segment_mask
 
 
+def _rasterize_branching_angle_skeleton_segments(
+    vessel_mask: np.ndarray,
+    measurements: Sequence[Mapping[str, object]],
+) -> np.ndarray:
+    skeleton_mask = skeletonize(vessel_mask)
+    if not np.any(skeleton_mask):
+        return skeleton_mask
+
+    segment_mask = np.zeros_like(skeleton_mask, dtype=bool)
+    for measurement in measurements:
+        if not {
+            "x_junction",
+            "y_junction",
+            "daughter_1_angle_x",
+            "daughter_1_angle_y",
+            "daughter_2_angle_x",
+            "daughter_2_angle_y",
+        }.issubset(measurement):
+            continue
+
+        start_yx = _nearest_skeleton_coordinate(
+            skeleton_mask,
+            x_value=float(measurement["x_junction"]),
+            y_value=float(measurement["y_junction"]),
+        )
+        if start_yx is None:
+            continue
+
+        for daughter_index in (1, 2):
+            end_yx = _nearest_skeleton_coordinate(
+                skeleton_mask,
+                x_value=float(measurement[f"daughter_{daughter_index}_angle_x"]),
+                y_value=float(measurement[f"daughter_{daughter_index}_angle_y"]),
+            )
+            if end_yx is None:
+                continue
+            segment_mask |= _trace_skeleton_segment(skeleton_mask, start_yx, end_yx)
+    return segment_mask
+
+
 def create_fundus_overlay(
     rgb_path: str,
     av_path: Optional[str] = None,
@@ -147,6 +187,8 @@ def create_fundus_overlay(
     vessel_path: Optional[str] = None,
     circle_paths: Optional[Mapping[str, str]] = None,
     vessel_width_measurements: Optional[Sequence[Mapping[str, object]]] = None,
+    branching_measurements: Optional[Sequence[Mapping[str, object]]] = None,
+    branching_width_measurements: Optional[Sequence[Mapping[str, object]]] = None,
     tortuosity_measurements: Optional[Sequence[Mapping[str, object]]] = None,
     fovea_location: Optional[Tuple[int, int]] = None,
     output_path: Optional[str] = None,
@@ -162,6 +204,8 @@ def create_fundus_overlay(
         vessel_path: Optional path to binary vessel segmentation for clipping measurement overlays
         circle_paths: Optional mapping from circle names to binary circle-mask paths
         vessel_width_measurements: Optional sequence of kept width-measurement records to draw
+        branching_measurements: Optional branch-point records to draw
+        branching_width_measurements: Optional branch-width sample records to draw
         tortuosity_measurements: Optional sequence of tortuosity records whose endpoint
             chord lines should be drawn; when provided with vessel_path, the vessel
             skeleton is also overlaid
@@ -222,9 +266,42 @@ def create_fundus_overlay(
         )
         output_img[measurement_mask, :] = overlay_config.colors.vessel_width
 
+    if branching_width_measurements and overlay_config.layers.vessel_branching:
+        measurement_mask = _rasterize_vessel_width_measurements(
+            image_shape=output_img.shape[:2],
+            measurements=branching_width_measurements,
+            vessel_mask=vessel_mask,
+        )
+        output_img[measurement_mask, :] = overlay_config.colors.vessel_width
+
+    if (
+        branching_measurements
+        and overlay_config.layers.vessel_branching
+        and vessel_mask is not None
+    ):
+        angle_skeleton_mask = _rasterize_branching_angle_skeleton_segments(
+            vessel_mask,
+            branching_measurements,
+        )
+        output_img[angle_skeleton_mask, :] = overlay_config.colors.vessel
+
     # Convert to PIL image for drawing the fovea marker
     pil_img = Image.fromarray(output_img)
     draw = ImageDraw.Draw(pil_img)
+
+    if branching_measurements and overlay_config.layers.vessel_branching:
+        marker_radius = max(3, min(pil_img.width, pil_img.height) // 120)
+        for measurement in branching_measurements:
+            x = float(measurement["x_junction"])
+            y = float(measurement["y_junction"])
+            draw.ellipse(
+                [
+                    (x - marker_radius, y - marker_radius),
+                    (x + marker_radius, y + marker_radius),
+                ],
+                outline=overlay_config.colors.branch_point,
+                width=1,
+            )
 
     # Add fovea marker if provided
     if fovea_location and overlay_config.layers.fovea:
@@ -276,6 +353,8 @@ def batch_create_overlays(
     vessels_dir: Optional[Path] = None,
     circle_dirs: Optional[Mapping[str, Path]] = None,
     vessel_width_data: Optional[pd.DataFrame] = None,
+    branching_data: Optional[pd.DataFrame] = None,
+    branching_width_data: Optional[pd.DataFrame] = None,
     tortuosity_data: Optional[pd.DataFrame] = None,
     fovea_data: Optional[Dict[str, Tuple[int, int]]] = None,
     overlay_config: Optional[OverlayConfig] = None,
@@ -291,6 +370,8 @@ def batch_create_overlays(
         vessels_dir: Optional directory containing vessel segmentations used to clip width overlays
         circle_dirs: Optional mapping from circle names to directories containing circle masks
         vessel_width_data: Optional dataframe containing kept width-measurement records
+        branching_data: Optional dataframe containing branch-point records
+        branching_width_data: Optional dataframe containing branch-width sample records
         tortuosity_data: Optional dataframe containing tortuosity segment records
         fovea_data: Optional dictionary mapping image IDs to fovea coordinates
         overlay_config: Overlay display configuration including enabled layers and colors
@@ -305,6 +386,14 @@ def batch_create_overlays(
     if vessel_width_data is not None and not vessel_width_data.empty:
         for image_id, group in vessel_width_data.groupby("image_id"):
             measurements_by_image[str(image_id)] = group.to_dict(orient="records")
+    branchings_by_image: dict[str, list[dict[str, object]]] = {}
+    if branching_data is not None and not branching_data.empty:
+        for image_id, group in branching_data.groupby("image_id"):
+            branchings_by_image[str(image_id)] = group.to_dict(orient="records")
+    branching_widths_by_image: dict[str, list[dict[str, object]]] = {}
+    if branching_width_data is not None and not branching_width_data.empty:
+        for image_id, group in branching_width_data.groupby("image_id"):
+            branching_widths_by_image[str(image_id)] = group.to_dict(orient="records")
     tortuosities_by_image: dict[str, list[dict[str, object]]] = {}
     if tortuosity_data is not None and not tortuosity_data.empty:
         for image_id, group in tortuosity_data.groupby("image_id"):
@@ -367,6 +456,8 @@ def batch_create_overlays(
             vessel_path=vessel_file,
             circle_paths=circle_files,
             vessel_width_measurements=measurements_by_image.get(image_id),
+            branching_measurements=branchings_by_image.get(image_id),
+            branching_width_measurements=branching_widths_by_image.get(image_id),
             tortuosity_measurements=tortuosities_by_image.get(image_id),
             fovea_location=fovea_location,
             output_path=str(output_file),

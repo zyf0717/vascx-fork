@@ -27,6 +27,7 @@ class PipelineDependencies:
     compute_revised_crx_from_widths: Callable[..., object]
     measure_vessel_tortuosities_between_disc_circle_pair: Callable[..., object]
     summarize_vessel_tortuosities: Callable[..., object]
+    measure_vessel_branching_between_disc_circle_pair: Callable[..., object]
     select_vessel_width_measurements_for_equivalents: Callable[..., object]
     batch_create_overlays: Callable[..., object]
     run_preprocessing: Callable[..., object]
@@ -95,6 +96,7 @@ def remove_metric_outputs(
     output_path: Path,
     width_enabled: bool,
     tortuosity_enabled: bool,
+    branching_enabled: bool,
 ) -> None:
     if not width_enabled:
         width_paths = (
@@ -115,6 +117,18 @@ def remove_metric_outputs(
             output_path / "vessel_tortuosity_overlays",
         )
         for path in tort_paths:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+
+    if not branching_enabled:
+        branch_paths = (
+            output_path / "vessel_branching.csv",
+            output_path / "vessel_branching_widths.csv",
+            output_path / "vessel_branching_overlays",
+        )
+        for path in branch_paths:
             if path.is_dir():
                 shutil.rmtree(path)
             elif path.exists():
@@ -164,6 +178,17 @@ def width_overlay_config(overlay_config):
     )
 
 
+def branching_overlay_config(overlay_config):
+    return replace(
+        overlay_config,
+        layers=replace(
+            overlay_config.layers,
+            vessel_branching=True,
+            vessel_widths=False,
+        ),
+    )
+
+
 def metric_circle_names(config_section) -> tuple[str, str] | None:
     if (
         not config_section.enabled
@@ -180,11 +205,14 @@ def render_metric_overlays(
     overlay_config,
     width_circle_names: tuple[str, str] | None,
     tortuosity_circle_names: tuple[str, str] | None,
+    branching_circle_names: tuple[str, str] | None,
     av_dir: Path | None,
     disc_dir: Path | None,
     vessels_dir: Path,
     df_vessel_widths: pd.DataFrame | None,
     df_vessel_tortuosities: pd.DataFrame | None,
+    df_vessel_branching: pd.DataFrame | None,
+    df_vessel_branching_widths: pd.DataFrame | None,
     df_selected_equivalent_widths: pd.DataFrame | None,
     fovea_data: dict[str, tuple[int, int]] | None,
     deps: PipelineDependencies,
@@ -209,6 +237,14 @@ def render_metric_overlays(
         else tortuosity_overlay_config(overlay_config)
     )
     tort_circle_dirs = overlay_circle_dirs(output_path, tort_config.circles)
+    branch_config = (
+        branching_overlay_config(
+            overlay_config_with_selected_circles(overlay_config, branching_circle_names)
+        )
+        if branching_circle_names is not None
+        else branching_overlay_config(overlay_config)
+    )
+    branch_circle_dirs = overlay_circle_dirs(output_path, branch_config.circles)
 
     deps.batch_create_overlays(
         rgb_dir=rgb_dir,
@@ -256,6 +292,24 @@ def render_metric_overlays(
             output_path / "vessel_width_overlays",
         )
 
+    if df_vessel_branching is not None:
+        deps.batch_create_overlays(
+            rgb_dir=rgb_dir,
+            output_dir=output_path / "vessel_branching_overlays",
+            av_dir=av_dir,
+            disc_dir=disc_dir,
+            vessels_dir=vessels_dir,
+            circle_dirs=branch_circle_dirs,
+            branching_data=df_vessel_branching,
+            branching_width_data=df_vessel_branching_widths,
+            fovea_data=fovea_data,
+            overlay_config=branch_config,
+        )
+        logger.info(
+            "Vessel branching overlays saved to %s",
+            output_path / "vessel_branching_overlays",
+        )
+
 
 def refresh_vessel_metric_disc_artifacts(
     output_path: Path,
@@ -294,16 +348,20 @@ def refresh_vessel_metric_overlays(
     app_config,
     df_vessel_widths: pd.DataFrame,
     df_vessel_tortuosities: pd.DataFrame,
+    df_vessel_branching: pd.DataFrame,
+    df_vessel_branching_widths: pd.DataFrame,
     df_connection_widths: pd.DataFrame,
     deps: PipelineDependencies,
 ) -> None:
     overlay_path = output_path / "overlays"
     vessel_width_overlay_path = output_path / "vessel_width_overlays"
     vessel_tortuosity_overlay_path = output_path / "vessel_tortuosity_overlays"
+    vessel_branching_overlay_path = output_path / "vessel_branching_overlays"
     for overlay_dir in (
         overlay_path,
         vessel_width_overlay_path,
         vessel_tortuosity_overlay_path,
+        vessel_branching_overlay_path,
     ):
         if overlay_dir.exists():
             shutil.rmtree(overlay_dir)
@@ -337,11 +395,14 @@ def refresh_vessel_metric_overlays(
         overlay_config=app_config.overlay,
         width_circle_names=metric_circle_names(app_config.vessel_widths),
         tortuosity_circle_names=metric_circle_names(app_config.vessel_tortuosities),
+        branching_circle_names=metric_circle_names(app_config.vessel_branching),
         av_dir=output_path / "artery_vein",
         disc_dir=disc_dir if disc_dir.is_dir() else None,
         vessels_dir=output_path / "vessels",
         df_vessel_widths=df_vessel_widths,
         df_vessel_tortuosities=df_vessel_tortuosities,
+        df_vessel_branching=df_vessel_branching,
+        df_vessel_branching_widths=df_vessel_branching_widths,
         df_selected_equivalent_widths=df_selected_equivalent_widths,
         fovea_data=fovea_data,
         deps=deps,
@@ -362,9 +423,12 @@ def compute_and_save_vessel_metrics(
     pd.DataFrame | None,
     pd.DataFrame | None,
     pd.DataFrame | None,
+    pd.DataFrame | None,
+    pd.DataFrame | None,
 ]:
     width_inner_circle = width_outer_circle = None
     tortuosity_inner_circle = tortuosity_outer_circle = None
+    branching_inner_circle = branching_outer_circle = None
     if app_config.vessel_widths.enabled:
         width_inner_circle, width_outer_circle = deps.resolve_vessel_width_circle_pair(
             app_config.overlay.circles,
@@ -379,21 +443,31 @@ def compute_and_save_vessel_metrics(
                 outer_circle_name=app_config.vessel_tortuosities.outer_circle,
             )
         )
+    if app_config.vessel_branching.enabled:
+        branching_inner_circle, branching_outer_circle = (
+            deps.resolve_vessel_width_circle_pair(
+                app_config.overlay.circles,
+                inner_circle_name=app_config.vessel_branching.inner_circle,
+                outer_circle_name=app_config.vessel_branching.outer_circle,
+            )
+        )
 
     remove_metric_outputs(
         output_path,
         width_enabled=app_config.vessel_widths.enabled,
         tortuosity_enabled=app_config.vessel_tortuosities.enabled,
+        branching_enabled=app_config.vessel_branching.enabled,
     )
 
     if (
         not app_config.vessel_widths.enabled
         and not app_config.vessel_tortuosities.enabled
+        and not app_config.vessel_branching.enabled
     ):
         logger.info(
-            "Skipping vessel width and tortuosity metrics because both are disabled"
+            "Skipping vessel metrics because all vessel metric sections are disabled"
         )
-        return (None, None, None, None, None)
+        return (None, None, None, None, None, None, None)
 
     rgb_dir = None
     if (
@@ -409,12 +483,16 @@ def compute_and_save_vessel_metrics(
     vessel_tortuosities_path = output_path / "vessel_tortuosities.csv"
     vessel_tortuosity_summary_path = output_path / "vessel_tortuosity_summary.csv"
     vessel_equivalents_path = output_path / "vessel_equivalents.csv"
+    vessel_branching_path = output_path / "vessel_branching.csv"
+    vessel_branching_widths_path = output_path / "vessel_branching_widths.csv"
 
     df_vessel_widths = None
     df_connection_widths = None
     df_vessel_equivalents = None
     df_vessel_tortuosities = None
     df_vessel_tortuosity_summary = None
+    df_vessel_branching = None
+    df_vessel_branching_widths = None
     try:
         if app_config.vessel_widths.enabled:
             logger.info(
@@ -478,6 +556,34 @@ def compute_and_save_vessel_metrics(
             logger.info(
                 "Skipping vessel tortuosity metrics because vessel_tortuosities.enabled is false"
             )
+
+        if app_config.vessel_branching.enabled:
+            logger.info(
+                "Measuring vessel branching between %s and %s",
+                branching_inner_circle.name,
+                branching_outer_circle.name,
+            )
+            df_vessel_branching, df_vessel_branching_widths = (
+                deps.measure_vessel_branching_between_disc_circle_pair(
+                    vessels_dir=vessels_path,
+                    av_dir=av_path,
+                    disc_geometry_path=disc_geometry_path,
+                    inner_circle=branching_inner_circle,
+                    outer_circle=branching_outer_circle,
+                    output_path=vessel_branching_path,
+                    widths_output_path=vessel_branching_widths_path,
+                    branching_config=app_config.vessel_branching,
+                )
+            )
+            logger.info(
+                "Vessel branching outputs saved to %s and %s",
+                vessel_branching_path,
+                vessel_branching_widths_path,
+            )
+        else:
+            logger.info(
+                "Skipping vessel branching metrics because vessel_branching.enabled is false"
+            )
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -487,6 +593,8 @@ def compute_and_save_vessel_metrics(
         df_vessel_tortuosity_summary,
         df_connection_widths,
         df_vessel_equivalents,
+        df_vessel_branching,
+        df_vessel_branching_widths,
     )
 
 
@@ -529,6 +637,8 @@ def run_vessel_metrics_pipeline(
         _,
         df_connection_widths,
         _,
+        df_vessel_branching,
+        df_vessel_branching_widths,
     ) = compute_and_save_vessel_metrics(
         vessels_path=vessels_path,
         av_path=av_path,
@@ -542,6 +652,8 @@ def run_vessel_metrics_pipeline(
         app_config=app_config,
         df_vessel_widths=df_vessel_widths,
         df_vessel_tortuosities=df_vessel_tortuosities,
+        df_vessel_branching=df_vessel_branching,
+        df_vessel_branching_widths=df_vessel_branching_widths,
         df_connection_widths=df_connection_widths,
         deps=deps,
     )
@@ -707,16 +819,22 @@ def run_pipeline(
             logger.info("Disc circles saved to %s", disc_circles_path)
         else:
             logger.info(
-                "Skipping disc circle generation because width and tortuosity metrics are disabled"
+                "Skipping disc circle generation because vessel metrics are disabled"
             )
 
     df_vessel_widths = None
     df_vessel_tortuosities = None
+    df_vessel_branching = None
+    df_vessel_branching_widths = None
     df_selected_equivalent_widths = None
     if (
         disc
         and vessels
-        and (app_config.vessel_widths.enabled or app_config.vessel_tortuosities.enabled)
+        and (
+            app_config.vessel_widths.enabled
+            or app_config.vessel_tortuosities.enabled
+            or app_config.vessel_branching.enabled
+        )
     ):
         (
             df_vessel_widths,
@@ -724,6 +842,8 @@ def run_pipeline(
             _,
             df_connection_widths,
             _,
+            df_vessel_branching,
+            df_vessel_branching_widths,
         ) = compute_and_save_vessel_metrics(
             vessels_path=vessels_path,
             av_path=av_path,
@@ -745,9 +865,11 @@ def run_pipeline(
                 vessel_tortuosities_path,
                 vessel_tortuosity_summary_path,
             )
+        if df_vessel_branching is not None:
+            logger.info("Vessel branching outputs saved to %s", output_path)
     elif disc and vessels:
         logger.info(
-            "Skipping vessel metrics because both vessel_widths.enabled and vessel_tortuosities.enabled are false"
+            "Skipping vessel metrics because all vessel metric sections are disabled"
         )
 
     df_fovea = None
@@ -774,11 +896,16 @@ def run_pipeline(
             overlay_config=app_config.overlay,
             width_circle_names=metric_circle_names(app_config.vessel_widths),
             tortuosity_circle_names=metric_circle_names(app_config.vessel_tortuosities),
+            branching_circle_names=metric_circle_names(app_config.vessel_branching),
             av_dir=av_path,
             disc_dir=disc_path,
             vessels_dir=vessels_path,
             df_vessel_widths=df_vessel_widths,
             df_vessel_tortuosities=df_vessel_tortuosities if disc and vessels else None,
+            df_vessel_branching=df_vessel_branching if disc and vessels else None,
+            df_vessel_branching_widths=(
+                df_vessel_branching_widths if disc and vessels else None
+            ),
             df_selected_equivalent_widths=df_selected_equivalent_widths,
             fovea_data=fovea_data,
             deps=deps,

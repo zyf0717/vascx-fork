@@ -14,6 +14,7 @@ class OverlayLayers:
     disc: bool = True
     fovea: bool = True
     vessel_widths: bool = True
+    vessel_branching: bool = True
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class OverlayColors:
     disc: tuple[int, int, int] = (255, 255, 255)
     fovea: tuple[int, int, int] = (255, 255, 0)
     vessel_width: tuple[int, int, int] = (0, 0, 0)
+    branch_point: tuple[int, int, int] = (255, 255, 0)
 
 
 @dataclass(frozen=True)
@@ -106,11 +108,27 @@ class VesselTortuosityConfig:
 
 
 @dataclass(frozen=True)
+class VesselBranchingConfig:
+    enabled: bool = True
+    inner_circle: str | None = "2r"
+    outer_circle: str | None = "5r"
+    boundary_tolerance_px: float = 1.5
+    min_branch_length_px: float = 15.0
+    width_skip_px: float = 5.0
+    width_sample_length_px: float = 15.0
+    width_samples_per_branch: int = 3
+    angle_sample_px: float = 10.0
+    measurement_step_px: float = 0.25
+    boundary_refinement_steps: int = 12
+    trace_padding_px: float = 2.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     vessel_widths: VesselWidthConfig = field(default_factory=VesselWidthConfig)
     vessel_tortuosities: VesselTortuosityConfig = field(
         default_factory=VesselTortuosityConfig
     )
+    vessel_branching: VesselBranchingConfig = field(default_factory=VesselBranchingConfig)
     source_path: Path | None = None
-

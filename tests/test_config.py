@@ -35,6 +35,7 @@ def test_load_app_config_accepts_aliases_and_colours(tmp_path: Path) -> None:
     assert app_config.overlay.circles[0].color == (0, 255, 0)
     assert app_config.vessel_widths.enabled is True
     assert app_config.vessel_tortuosities.enabled is True
+    assert app_config.vessel_branching.enabled is True
     assert app_config.vessel_widths.samples_per_connection == 5
 
 
@@ -94,6 +95,8 @@ def test_load_app_config_accepts_vessel_width_sampling_options(tmp_path: Path) -
                 "  enabled: true",
                 "  inner_circle: 3r",
                 "  outer_circle: 5r",
+                "vessel_branching:",
+                "  enabled: false",
             ]
         ),
         encoding="utf-8",
@@ -129,6 +132,8 @@ def test_load_app_config_skips_all_circles_when_metrics_disabled(
                 "vessel_widths:",
                 "  enabled: false",
                 "vessel_tortuosities:",
+                "  enabled: false",
+                "vessel_branching:",
                 "  enabled: false",
             ]
         ),
@@ -231,6 +236,51 @@ def test_load_app_config_accepts_profile_width_options(tmp_path: Path) -> None:
     assert app_config.vessel_widths.pvbm_mask.trace_step_px == 0.75
     assert app_config.vessel_widths.pvbm_mask.boundary_adjust_px == 0.25
     assert app_config.vessel_widths.pvbm_mask.trace_padding_px == 4.0
+
+
+def test_load_app_config_accepts_vessel_branching_options(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "overlay:",
+                "  colours:",
+                "    branch_point: '#123456'",
+                "  layers:",
+                "    branching: false",
+                "vessel_branching:",
+                "  enabled: true",
+                "  inner_circle: 3r",
+                "  outer_circle: 5r",
+                "  boundary_tolerance_px: 2.0",
+                "  min_branch_length_px: 12.0",
+                "  width_skip_px: 4.0",
+                "  width_sample_length_px: 10.0",
+                "  width_samples_per_branch: 2",
+                "  angle_sample_px: 8.0",
+                "  measurement_step_px: 0.5",
+                "  boundary_refinement_steps: 8",
+                "  trace_padding_px: 3.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app_config = load_app_config(config_path)
+
+    assert app_config.overlay.layers.vessel_branching is False
+    assert app_config.overlay.colors.branch_point == (18, 52, 86)
+    assert app_config.vessel_branching.inner_circle == "3r"
+    assert app_config.vessel_branching.outer_circle == "5r"
+    assert app_config.vessel_branching.boundary_tolerance_px == 2.0
+    assert app_config.vessel_branching.min_branch_length_px == 12.0
+    assert app_config.vessel_branching.width_skip_px == 4.0
+    assert app_config.vessel_branching.width_sample_length_px == 10.0
+    assert app_config.vessel_branching.width_samples_per_branch == 2
+    assert app_config.vessel_branching.angle_sample_px == 8.0
+    assert app_config.vessel_branching.measurement_step_px == 0.5
+    assert app_config.vessel_branching.boundary_refinement_steps == 8
+    assert app_config.vessel_branching.trace_padding_px == 3.0
 
 
 def test_load_app_config_rejects_invalid_vessel_width_samples_per_connection(

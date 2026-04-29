@@ -13,6 +13,7 @@ from .metrics.vessel_tortuosities import (
     measure_vessel_tortuosities_between_disc_circle_pair,
     summarize_vessel_tortuosities,
 )
+from .metrics.vessel_branching import measure_vessel_branching_between_disc_circle_pair
 from .metrics.vessel_widths import (
     compute_revised_crx_from_widths,
     measure_vessel_widths_between_disc_circle_pair,
@@ -68,6 +69,7 @@ def _pipeline_dependencies() -> pipeline_ops.PipelineDependencies:
         compute_revised_crx_from_widths=compute_revised_crx_from_widths,
         measure_vessel_tortuosities_between_disc_circle_pair=measure_vessel_tortuosities_between_disc_circle_pair,
         summarize_vessel_tortuosities=summarize_vessel_tortuosities,
+        measure_vessel_branching_between_disc_circle_pair=measure_vessel_branching_between_disc_circle_pair,
         select_vessel_width_measurements_for_equivalents=select_vessel_width_measurements_for_equivalents,
         batch_create_overlays=batch_create_overlays,
         run_preprocessing=_run_preprocessing,

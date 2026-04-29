@@ -65,3 +65,21 @@ vessel_tortuosities:
   enabled: true # true|false; compute vessel_tortuosities.csv, vessel_tortuosity_summary.csv, and vessel_tortuosity_overlays/
   inner_circle: "2r" # circle names must use the '<multiplier>r' format
   outer_circle: "5r" # must be larger than inner_circle
+
+####################
+# Vessel Branching #
+####################
+
+vessel_branching:
+  enabled: true # true|false; compute vessel_branching.csv, vessel_branching_widths.csv, and vessel_branching_overlays/
+  inner_circle: "2r" # circle names must use the '<multiplier>r' format
+  outer_circle: "5r" # must be larger than inner_circle
+  boundary_tolerance_px: 1.5 # positive number; annulus boundary tolerance for branch tree selection
+  min_branch_length_px: 15.0 # positive number; minimum parent/daughter path length from the branch point
+  width_skip_px: 5.0 # non-negative number; distance skipped away from the branch point before width sampling
+  width_sample_length_px: 15.0 # positive number; span over which each branch's width samples are placed
+  width_samples_per_branch: 3 # positive integer; samples per parent/daughter branch for median width
+  angle_sample_px: 10.0 # positive number; distance from branch point used for daughter direction vectors
+  measurement_step_px: 0.25 # positive number; step size when tracing mask boundaries
+  boundary_refinement_steps: 12 # positive integer; binary-search refinement iterations for mask boundaries
+  trace_padding_px: 2.0 # non-negative number; extra search distance beyond the image diagonal

@@ -80,7 +80,7 @@ Device selection defaults to `auto` (prefers `cuda`, then `mps`, then `cpu`). Re
 
 ## Configuration
 
-`config.yaml` controls overlay behaviour, disc-circle generation, and vessel-width sampling. The file is resolved from the current working directory first, then the repository root, or passed explicitly:
+`config.yaml` controls overlay behaviour, disc-circle generation, and vessel metric sampling. The file is resolved from the current working directory first, then the repository root, or passed explicitly:
 
 ```bash
 python -m vascx_models run DATA_PATH OUTPUT_PATH --config /path/to/config.yaml
@@ -118,6 +118,14 @@ Tortuosity measurement is handled separately and uses a different correspondence
 - ambiguous many-to-1 or many-to-many patterns are discarded
 - tortuosity summaries are length-weighted by `path_length_px`
 
+Branching measurement is also handled separately:
+
+- artery and vein masks are traced independently inside the configured branching annulus
+- only single-inner rooted 1-to-2 bifurcations are measured
+- parent branches are oriented toward the optic disc and daughter branches outward
+- parent/daughter widths are median mask-boundary widths over configurable audit samples
+- ambiguous crossings, cycles, merges, and non-bifurcating key nodes are discarded
+
 ## Outputs
 
 ```text
@@ -130,11 +138,14 @@ OUTPUT_PATH/
 ├── overlays/
 ├── vessel_width_overlays/
 ├── vessel_tortuosity_overlays/
+├── vessel_branching_overlays/
 ├── bounds.csv
 ├── disc_geometry.csv
 ├── vessel_widths.csv
 ├── vessel_tortuosities.csv
 ├── vessel_tortuosity_summary.csv
+├── vessel_branching.csv
+├── vessel_branching_widths.csv
 ├── vessel_equivalents.csv
 ├── quality.csv
 └── fovea.csv
@@ -154,6 +165,12 @@ Key CSV outputs:
 - `vessel_tortuosity_summary.csv`: per-image, per-vessel-type tortuosity summary,
   including the number of retained segments, total retained path length, and a
   length-weighted mean tortuosity (`TORTA` for arteries, `TORTV` for veins).
+- `vessel_branching.csv`: per-bifurcation branching records, including junction
+  coordinates, parent/daughter widths, daughter branching angle, branching
+  coefficient, daughter angle-sample endpoints, and branch path lengths.
+- `vessel_branching_widths.csv`: per-sample audit records for the width
+  measurements used by `vessel_branching.csv`, including width endpoints and
+  measurement validity/failure fields.
 - `vessel_equivalents.csv`: CRAE/CRVE summary per image and vessel type.
 
 Additional `vessel_widths.csv` columns include:
@@ -182,13 +199,16 @@ Overlay directories:
   vessels selected for CRAE/CRVE calculation.
 - `vessel_tortuosity_overlays/`: processed RGB overlaid with a green vessel
   skeleton and the Euclidean endpoint chords for retained tortuosity segments.
+- `vessel_branching_overlays/`: processed RGB overlaid with branch point
+  indicators and the parent/daughter width measurement locations used for the
+  branching CSVs.
 
 The CRAE/CRVE values are pixel-space equivalents unless you apply an external
 pixel-to-length calibration.
 
 ## Recomputing Vessel Metrics
 
-`vessel-metrics` runs only the path, width, tortuosity, and CRAE/CRVE stages
+`vessel-metrics` runs only the path, width, tortuosity, branching, and CRAE/CRVE stages
 from an existing pipeline output. The source directory must contain:
 
 - `vessels/`
@@ -197,7 +217,8 @@ from an existing pipeline output. The source directory must contain:
 
 The full source output directory is copied into the requested new output
 directory, then `vessel_widths.csv`, `vessel_tortuosities.csv`,
-`vessel_tortuosity_summary.csv`, `vessel_equivalents.csv`, and the overlay
+`vessel_tortuosity_summary.csv`, `vessel_branching.csv`,
+`vessel_branching_widths.csv`, `vessel_equivalents.csv`, and the overlay
 directories are refreshed there. When no destination is provided,
 `vessel-metrics` creates a standard `output_YYYYMMDD_HHMMSS` folder in the
 current working directory. The destination must be new or empty, and it cannot

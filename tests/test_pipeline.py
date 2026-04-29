@@ -64,6 +64,10 @@ def _build_dependencies(**overrides) -> pipeline_ops.PipelineDependencies:
         compute_revised_crx_from_widths=lambda _df: (pd.DataFrame(), pd.DataFrame()),
         measure_vessel_tortuosities_between_disc_circle_pair=lambda **kwargs: pd.DataFrame(),
         summarize_vessel_tortuosities=lambda df, output_path=None: df,
+        measure_vessel_branching_between_disc_circle_pair=lambda **kwargs: (
+            pd.DataFrame(),
+            pd.DataFrame(),
+        ),
         select_vessel_width_measurements_for_equivalents=lambda df_widths, _df_connections: df_widths,
         batch_create_overlays=lambda **kwargs: None,
         run_preprocessing=lambda **kwargs: None,
@@ -210,6 +214,52 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
             summary.to_csv(output_path, index=False)
         return summary
 
+    def fake_measure_vessel_branching_between_disc_circle_pair(**kwargs):
+        calls["measure_vessel_branching"] = kwargs
+        df_branching = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "5r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 25.0,
+                    "connection_index": 1,
+                    "x_junction": 16.0,
+                    "y_junction": 14.0,
+                    "parent_width_px": 7.0,
+                    "daughter_1_width_px": 5.0,
+                    "daughter_2_width_px": 5.0,
+                    "branching_angle_deg": 90.0,
+                    "branching_coefficient": 50.0 / 49.0,
+                    "vessel_type": "artery",
+                }
+            ]
+        )
+        df_widths = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "connection_index": 1,
+                    "branch_role": "parent",
+                    "sample_index": 1,
+                    "x_junction": 16.0,
+                    "y_junction": 14.0,
+                    "x": 16.0,
+                    "y": 12.0,
+                    "width_px": 7.0,
+                    "x_start": 13.0,
+                    "y_start": 12.0,
+                    "x_end": 19.0,
+                    "y_end": 12.0,
+                    "vessel_type": "artery",
+                }
+            ]
+        )
+        df_branching.to_csv(kwargs["output_path"], index=False)
+        df_widths.to_csv(kwargs["widths_output_path"], index=False)
+        return df_branching, df_widths
+
     def fake_batch_create_overlays(**kwargs):
         calls.setdefault("batch_create_overlays", []).append(kwargs)
 
@@ -223,6 +273,7 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
         compute_revised_crx_from_widths=fake_compute_revised_crx_from_widths,
         measure_vessel_tortuosities_between_disc_circle_pair=fake_measure_vessel_tortuosities_between_disc_circle_pair,
         summarize_vessel_tortuosities=fake_summarize_vessel_tortuosities,
+        measure_vessel_branching_between_disc_circle_pair=fake_measure_vessel_branching_between_disc_circle_pair,
         batch_create_overlays=fake_batch_create_overlays,
     )
     app_config = _load_app_config(
@@ -257,6 +308,11 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
             "  enabled: true",
             "  inner_circle: 2r",
             "  outer_circle: 5r",
+            "vessel_branching:",
+            "  enabled: true",
+            "  inner_circle: 2r",
+            "  outer_circle: 5r",
+            "  width_samples_per_branch: 2",
         ],
     )
 
@@ -297,10 +353,24 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
     assert calls["measure_vessel_widths"]["width_config"].method == "profile"
     assert calls["measure_vessel_widths"]["width_config"].mask.tangent_window_px == 11.0
     assert calls["measure_vessel_widths"]["rgb_dir"] == output_dir / "preprocessed_rgb"
+    assert calls["measure_vessel_branching"]["inner_circle"].name == "2r"
+    assert calls["measure_vessel_branching"]["outer_circle"].name == "5r"
+    assert calls["measure_vessel_branching"]["output_path"] == (
+        output_dir / "vessel_branching.csv"
+    )
+    assert calls["measure_vessel_branching"]["widths_output_path"] == (
+        output_dir / "vessel_branching_widths.csv"
+    )
+    assert (
+        calls["measure_vessel_branching"][
+            "branching_config"
+        ].width_samples_per_branch
+        == 2
+    )
     assert calls["generate_disc_circles"]["circles"][0].name == "2r"
     assert calls["generate_disc_circles"]["circles"][0].color == (18, 52, 86)
     overlay_calls = calls["batch_create_overlays"]
-    assert len(overlay_calls) == 3
+    assert len(overlay_calls) == 4
     assert overlay_calls[0]["output_dir"] == output_dir / "overlays"
     assert overlay_calls[0]["vessels_dir"] == output_dir / "vessels"
     assert overlay_calls[0]["overlay_config"].layers.vessel_widths is False
@@ -337,6 +407,10 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
     selected_measurement_data = overlay_calls[2]["vessel_width_data"]
     assert isinstance(selected_measurement_data, pd.DataFrame)
     assert selected_measurement_data.iloc[0]["width_px"] == 7.0
+    assert overlay_calls[3]["output_dir"] == output_dir / "vessel_branching_overlays"
+    assert overlay_calls[3]["branching_data"].iloc[0]["branching_angle_deg"] == 90.0
+    assert overlay_calls[3]["branching_width_data"].iloc[0]["width_px"] == 7.0
+    assert overlay_calls[3]["overlay_config"].layers.vessel_branching is True
 
     vessel_equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
     vessel_tortuosity_summary = pd.read_csv(
@@ -389,6 +463,10 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
     )
     (source_dir / "vessel_width_overlays").mkdir()
     (source_dir / "vessel_width_overlays" / "stale.png").write_text(
+        "stale", encoding="utf-8"
+    )
+    (source_dir / "vessel_branching_overlays").mkdir()
+    (source_dir / "vessel_branching_overlays" / "stale.png").write_text(
         "stale", encoding="utf-8"
     )
 
@@ -528,6 +606,52 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
             summary.to_csv(output_path, index=False)
         return summary
 
+    def fake_measure_vessel_branching_between_disc_circle_pair(**kwargs):
+        calls["measure_vessel_branching"] = kwargs
+        df_branching = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "inner_circle": "2r",
+                    "outer_circle": "3r",
+                    "inner_circle_radius_px": 10.0,
+                    "outer_circle_radius_px": 15.0,
+                    "connection_index": 1,
+                    "x_junction": 16.0,
+                    "y_junction": 14.0,
+                    "parent_width_px": 7.0,
+                    "daughter_1_width_px": 5.0,
+                    "daughter_2_width_px": 5.0,
+                    "branching_angle_deg": 90.0,
+                    "branching_coefficient": 50.0 / 49.0,
+                    "vessel_type": "artery",
+                }
+            ]
+        )
+        df_widths = pd.DataFrame(
+            [
+                {
+                    "image_id": "sample",
+                    "connection_index": 1,
+                    "branch_role": "parent",
+                    "sample_index": 1,
+                    "x_junction": 16.0,
+                    "y_junction": 14.0,
+                    "x": 16.0,
+                    "y": 12.0,
+                    "width_px": 7.0,
+                    "x_start": 13.0,
+                    "y_start": 12.0,
+                    "x_end": 19.0,
+                    "y_end": 12.0,
+                    "vessel_type": "artery",
+                }
+            ]
+        )
+        df_branching.to_csv(kwargs["output_path"], index=False)
+        df_widths.to_csv(kwargs["widths_output_path"], index=False)
+        return df_branching, df_widths
+
     def fake_generate_disc_circles(**kwargs):
         calls["generate_disc_circles"] = kwargs
         kwargs["circle_output_dir"].mkdir(parents=True, exist_ok=True)
@@ -555,6 +679,7 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
         compute_revised_crx_from_widths=fake_compute_revised_crx_from_widths,
         measure_vessel_tortuosities_between_disc_circle_pair=fake_measure_vessel_tortuosities_between_disc_circle_pair,
         summarize_vessel_tortuosities=fake_summarize_vessel_tortuosities,
+        measure_vessel_branching_between_disc_circle_pair=fake_measure_vessel_branching_between_disc_circle_pair,
         generate_disc_circles=fake_generate_disc_circles,
         batch_create_overlays=fake_batch_create_overlays,
     )
@@ -570,6 +695,10 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
             "  samples_per_connection: 4",
             "  method: profile",
             "vessel_tortuosities:",
+            "  enabled: true",
+            "  inner_circle: 2r",
+            "  outer_circle: 3r",
+            "vessel_branching:",
             "  enabled: true",
             "  inner_circle: 2r",
             "  outer_circle: 3r",
@@ -609,7 +738,9 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
     assert calls["measure_vessel_widths"]["rgb_dir"] == output_dir / "preprocessed_rgb"
     assert calls["measure_vessel_tortuosities"]["vessels_dir"] == output_dir / "vessels"
     assert calls["measure_vessel_tortuosities"]["av_dir"] == output_dir / "artery_vein"
-    assert len(calls["batch_create_overlays"]) == 3
+    assert calls["measure_vessel_branching"]["vessels_dir"] == output_dir / "vessels"
+    assert calls["measure_vessel_branching"]["av_dir"] == output_dir / "artery_vein"
+    assert len(calls["batch_create_overlays"]) == 4
     assert calls["batch_create_overlays"][0]["output_dir"] == output_dir / "overlays"
     assert (
         calls["batch_create_overlays"][1]["output_dir"]
@@ -619,17 +750,26 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
         calls["batch_create_overlays"][2]["output_dir"]
         == output_dir / "vessel_width_overlays"
     )
+    assert (
+        calls["batch_create_overlays"][3]["output_dir"]
+        == output_dir / "vessel_branching_overlays"
+    )
     assert not (output_dir / "overlays" / "stale.png").exists()
     assert not (output_dir / "vessel_width_overlays" / "stale.png").exists()
     assert not (output_dir / "vessel_tortuosity_overlays" / "stale.png").exists()
+    assert not (output_dir / "vessel_branching_overlays" / "stale.png").exists()
     assert (output_dir / "overlays" / "fresh.txt").exists()
     assert (output_dir / "vessel_width_overlays" / "fresh.txt").exists()
     assert (output_dir / "vessel_tortuosity_overlays" / "fresh.txt").exists()
+    assert (output_dir / "vessel_branching_overlays" / "fresh.txt").exists()
     assert (output_dir / "vessel_widths.csv").exists()
     assert pd.read_csv(output_dir / "vessel_widths.csv").iloc[0]["width_px"] == 7.0
     assert (output_dir / "vessel_tortuosities.csv").exists()
     assert (output_dir / "vessel_tortuosity_summary.csv").exists()
+    assert (output_dir / "vessel_branching.csv").exists()
+    assert (output_dir / "vessel_branching_widths.csv").exists()
     assert (output_dir / "vessel_tortuosity_overlays").exists()
+    assert (output_dir / "vessel_branching_overlays").exists()
     equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
     assert equivalents.iloc[0]["metric"] == "CRAE"
     assert "mean_tortuosity_used" not in equivalents.columns
@@ -659,6 +799,9 @@ def test_run_pipeline_skips_disabled_metric_sections(tmp_path: Path) -> None:
         measure_vessel_tortuosities_between_disc_circle_pair=lambda **kwargs: calls.setdefault(
             "measure_vessel_tortuosities", kwargs
         ),
+        measure_vessel_branching_between_disc_circle_pair=lambda **kwargs: calls.setdefault(
+            "measure_vessel_branching", kwargs
+        ),
         batch_create_overlays=lambda **kwargs: calls.setdefault(
             "batch_create_overlays", []
         ).append(kwargs),
@@ -669,6 +812,8 @@ def test_run_pipeline_skips_disabled_metric_sections(tmp_path: Path) -> None:
             "vessel_widths:",
             "  enabled: false",
             "vessel_tortuosities:",
+            "  enabled: false",
+            "vessel_branching:",
             "  enabled: false",
         ],
     )
@@ -691,6 +836,7 @@ def test_run_pipeline_skips_disabled_metric_sections(tmp_path: Path) -> None:
     assert "generate_disc_circles" not in calls
     assert "measure_vessel_widths" not in calls
     assert "measure_vessel_tortuosities" not in calls
+    assert "measure_vessel_branching" not in calls
     assert len(calls["batch_create_overlays"]) == 1
     assert calls["batch_create_overlays"][0]["output_dir"] == output_dir / "overlays"
 

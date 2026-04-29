@@ -26,6 +26,18 @@ class VesselPath:
     skeleton: np.ndarray
 
 
+@dataclass(frozen=True)
+class VesselBranchingPoint:
+    connection_index: int
+    junction_xy: np.ndarray
+    junction_yx: np.ndarray
+    parent_path_xy: np.ndarray
+    daughter_paths_xy: tuple[np.ndarray, np.ndarray]
+    parent_path_yx: np.ndarray
+    daughter_paths_yx: tuple[np.ndarray, np.ndarray]
+    skeleton: np.ndarray
+
+
 def skeletonize(binary_mask: np.ndarray) -> np.ndarray:
     """Thin a binary mask to a one-pixel-wide skeleton."""
     if binary_mask.ndim != 2:
@@ -494,6 +506,204 @@ def _rooted_key_node_segments(
             key_stack.append(current)
 
     return segments
+
+
+def _rooted_parent_child_maps(
+    graph: dict[tuple[int, int], list[tuple[int, int]]],
+    root: tuple[int, int],
+) -> (
+    tuple[
+        dict[tuple[int, int], tuple[int, int] | None],
+        dict[tuple[int, int], list[tuple[int, int]]],
+    ]
+    | None
+):
+    edge_count = sum(len(adjacent) for adjacent in graph.values()) // 2
+    if edge_count != len(graph) - 1:
+        return None
+
+    parent_by_node: dict[tuple[int, int], tuple[int, int] | None] = {root: None}
+    traversal_stack = [root]
+    while traversal_stack:
+        node = traversal_stack.pop()
+        parent = parent_by_node[node]
+        for neighbor in graph[node]:
+            if neighbor == parent:
+                continue
+            if neighbor in parent_by_node:
+                return None
+            parent_by_node[neighbor] = node
+            traversal_stack.append(neighbor)
+
+    if len(parent_by_node) != len(graph):
+        return None
+
+    child_by_node: dict[tuple[int, int], list[tuple[int, int]]] = {
+        node: [] for node in graph
+    }
+    for node, parent in parent_by_node.items():
+        if parent is not None:
+            child_by_node[parent].append(node)
+    for children in child_by_node.values():
+        children.sort()
+
+    return parent_by_node, child_by_node
+
+
+def _trace_upstream_branch(
+    node: tuple[int, int],
+    parent_by_node: dict[tuple[int, int], tuple[int, int] | None],
+    key_nodes: set[tuple[int, int]],
+) -> np.ndarray | None:
+    path = [node]
+    current = parent_by_node[node]
+    while current is not None:
+        path.append(current)
+        if current in key_nodes:
+            break
+        current = parent_by_node[current]
+
+    if len(path) < 2:
+        return None
+    return np.asarray(path, dtype=float)
+
+
+def _trace_downstream_branch(
+    node: tuple[int, int],
+    child: tuple[int, int],
+    child_by_node: dict[tuple[int, int], list[tuple[int, int]]],
+    key_nodes: set[tuple[int, int]],
+) -> np.ndarray | None:
+    path = [node, child]
+    current = child
+    while current not in key_nodes:
+        children = child_by_node[current]
+        if len(children) != 1:
+            return None
+        current = children[0]
+        path.append(current)
+
+    return np.asarray(path, dtype=float)
+
+
+def trace_vessel_branching_points_between_disc_circle_pair(
+    vessel_mask: np.ndarray,
+    disc_center_xy: np.ndarray,
+    inner_radius_px: float,
+    outer_radius_px: float,
+    boundary_tolerance_px: float,
+) -> list[VesselBranchingPoint]:
+    """Return rooted 1-to-2 bifurcations within the annulus.
+
+    Components are only measured when they form a single-inner rooted tree. The
+    returned parent path points from the junction back toward the disc; daughter
+    paths point from the junction outward.
+    """
+    if not np.any(vessel_mask):
+        return []
+    if outer_radius_px <= inner_radius_px:
+        raise ValueError("outer_radius_px must be larger than inner_radius_px")
+
+    skeleton = skeletonize(vessel_mask)
+    if not np.any(skeleton):
+        return []
+
+    yy, xx = np.indices(vessel_mask.shape, dtype=float)
+    distances = np.hypot(xx - disc_center_xy[0], yy - disc_center_xy[1])
+    annulus_mask = (
+        skeleton & (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    )
+    components = connected_components(annulus_mask)
+
+    branching_points: list[VesselBranchingPoint] = []
+    connection_index = 0
+    for component in components:
+        neighbors = component_neighbor_map(component)
+        boundary_roles = boundary_roles_for_component(
+            component=component,
+            distances=distances,
+            inner_radius_px=inner_radius_px,
+            outer_radius_px=outer_radius_px,
+            boundary_tolerance_px=boundary_tolerance_px,
+        )
+        inner_nodes = {
+            node for node, role in boundary_roles.items() if role == "inner"
+        }
+        outer_nodes = {
+            node for node, role in boundary_roles.items() if role == "outer"
+        }
+        if not inner_nodes or not outer_nodes:
+            continue
+
+        active_nodes = prune_to_inner_outer_nodes(neighbors, boundary_roles)
+        active_graph = active_subgraph(neighbors, active_nodes)
+        for group in connected_node_groups(active_graph):
+            group_inner_nodes = sorted(inner_nodes & group)
+            group_outer_nodes = outer_nodes & group
+            if len(group_inner_nodes) != 1 or not group_outer_nodes:
+                continue
+
+            group_graph = active_subgraph(active_graph, group)
+            maps = _rooted_parent_child_maps(group_graph, root=group_inner_nodes[0])
+            if maps is None:
+                continue
+            parent_by_node, child_by_node = maps
+            key_nodes = _key_nodes_for_graph(group_graph, boundary_roles)
+
+            for node in sorted(key_nodes):
+                if node in boundary_roles or parent_by_node[node] is None:
+                    continue
+                children = child_by_node[node]
+                if len(children) != 2:
+                    continue
+
+                parent_path_yx = _trace_upstream_branch(
+                    node,
+                    parent_by_node=parent_by_node,
+                    key_nodes=key_nodes,
+                )
+                daughter_paths_yx = tuple(
+                    _trace_downstream_branch(
+                        node,
+                        child,
+                        child_by_node=child_by_node,
+                        key_nodes=key_nodes,
+                    )
+                    for child in children
+                )
+                if parent_path_yx is None or any(
+                    path is None for path in daughter_paths_yx
+                ):
+                    continue
+
+                parent_path_yx = parent_path_yx.astype(float)
+                daughter_a_yx = daughter_paths_yx[0].astype(float)
+                daughter_b_yx = daughter_paths_yx[1].astype(float)
+                point_skeleton = np.zeros_like(skeleton, dtype=bool)
+                for path_yx in (parent_path_yx, daughter_a_yx, daughter_b_yx):
+                    rows = path_yx[:, 0].astype(int)
+                    cols = path_yx[:, 1].astype(int)
+                    point_skeleton[rows, cols] = True
+
+                connection_index += 1
+                junction_yx = np.asarray(node, dtype=float)
+                branching_points.append(
+                    VesselBranchingPoint(
+                        connection_index=connection_index,
+                        junction_xy=junction_yx[::-1],
+                        junction_yx=junction_yx,
+                        parent_path_xy=parent_path_yx[:, ::-1],
+                        daughter_paths_xy=(
+                            daughter_a_yx[:, ::-1],
+                            daughter_b_yx[:, ::-1],
+                        ),
+                        parent_path_yx=parent_path_yx,
+                        daughter_paths_yx=(daughter_a_yx, daughter_b_yx),
+                        skeleton=point_skeleton,
+                    )
+                )
+
+    return branching_points
 
 
 def trace_vessel_tortuosity_paths_between_disc_circle_pair(

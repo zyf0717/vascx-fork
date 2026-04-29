@@ -17,6 +17,7 @@ from .config_types import (
     OverlayLayers,
     PVBMMaskWidthConfig,
     ProfileWidthConfig,
+    VesselBranchingConfig,
     VesselTortuosityConfig,
     VesselWidthConfig,
 )
@@ -34,12 +35,15 @@ class _OverlayLayers(_ConfigModel):
         "veins": "veins",
         "disc": "disc",
         "fovea": "fovea",
+        "branching": "vessel_branching",
+        "vessel_branching": "vessel_branching",
     }
 
     arteries: bool = True
     veins: bool = True
     disc: bool = True
     fovea: bool = True
+    vessel_branching: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -52,7 +56,14 @@ class _OverlayLayers(_ConfigModel):
             normalized[cls._aliases[raw_key]] = value
         return normalized
 
-    @field_validator("arteries", "veins", "disc", "fovea", mode="before")
+    @field_validator(
+        "arteries",
+        "veins",
+        "disc",
+        "fovea",
+        "vessel_branching",
+        mode="before",
+    )
     @classmethod
     def validate_bool(cls, value: Any, info: Any) -> bool:
         return _strict_bool(value, f"overlay.layers.{info.field_name}")
@@ -64,6 +75,7 @@ class _OverlayLayers(_ConfigModel):
             disc=self.disc,
             fovea=self.fovea,
             vessel_widths=False,
+            vessel_branching=self.vessel_branching,
         )
 
 
@@ -79,6 +91,8 @@ class _OverlayColors(_ConfigModel):
         "fovea": "fovea",
         "vessel_width": "vessel_width",
         "vessel_widths": "vessel_width",
+        "branch_point": "branch_point",
+        "branch_points": "branch_point",
     }
 
     artery: tuple[int, int, int] = (255, 0, 0)
@@ -87,6 +101,7 @@ class _OverlayColors(_ConfigModel):
     disc: tuple[int, int, int] = (255, 255, 255)
     fovea: tuple[int, int, int] = (255, 255, 0)
     vessel_width: tuple[int, int, int] = (0, 0, 0)
+    branch_point: tuple[int, int, int] = (255, 255, 0)
 
     @model_validator(mode="before")
     @classmethod
@@ -106,6 +121,7 @@ class _OverlayColors(_ConfigModel):
         "disc",
         "fovea",
         "vessel_width",
+        "branch_point",
         mode="before",
     )
     @classmethod
@@ -120,6 +136,7 @@ class _OverlayColors(_ConfigModel):
             disc=self.disc,
             fovea=self.fovea,
             vessel_width=self.vessel_width,
+            branch_point=self.branch_point,
         )
 
 
@@ -414,6 +431,65 @@ class _VesselTortuosityConfig(_ConfigModel):
         )
 
 
+class _VesselBranchingConfig(_ConfigModel):
+    enabled: bool = True
+    inner_circle: str | None = "2r"
+    outer_circle: str | None = "5r"
+    boundary_tolerance_px: float = 1.5
+    min_branch_length_px: float = 15.0
+    width_skip_px: float = 5.0
+    width_sample_length_px: float = 15.0
+    width_samples_per_branch: int = 3
+    angle_sample_px: float = 10.0
+    measurement_step_px: float = 0.25
+    boundary_refinement_steps: int = 12
+    trace_padding_px: float = 2.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_mapping(cls, data: Any) -> Any:
+        return _mapping_or_empty(data, "'vessel_branching' must be a mapping")
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def validate_enabled(cls, value: Any) -> bool:
+        return _strict_bool(value, "vessel_branching.enabled")
+
+    @field_validator("inner_circle", "outer_circle", mode="before")
+    @classmethod
+    def validate_circle_name(cls, value: Any, info: Any) -> str | None:
+        return _optional_string(value, f"vessel_branching.{info.field_name}")
+
+    @field_validator(
+        "boundary_tolerance_px",
+        "min_branch_length_px",
+        "width_sample_length_px",
+        "angle_sample_px",
+        "measurement_step_px",
+        mode="before",
+    )
+    @classmethod
+    def validate_positive_float(cls, value: Any, info: Any) -> float:
+        return _positive_float(value, f"vessel_branching.{info.field_name}")
+
+    @field_validator("width_skip_px", "trace_padding_px", mode="before")
+    @classmethod
+    def validate_non_negative_float(cls, value: Any, info: Any) -> float:
+        return _non_negative_float(value, f"vessel_branching.{info.field_name}")
+
+    @field_validator(
+        "width_samples_per_branch",
+        "boundary_refinement_steps",
+        mode="before",
+    )
+    @classmethod
+    def validate_positive_int(cls, value: Any, info: Any) -> int:
+        return _positive_int(value, f"vessel_branching.{info.field_name}")
+
+    def to_config(self) -> VesselBranchingConfig:
+        return VesselBranchingConfig(**self.model_dump())
+
+
 class _AppConfig(_ConfigModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -421,6 +497,9 @@ class _AppConfig(_ConfigModel):
     vessel_widths: _VesselWidthConfig = Field(default_factory=_VesselWidthConfig)
     vessel_tortuosities: _VesselTortuosityConfig = Field(
         default_factory=_VesselTortuosityConfig
+    )
+    vessel_branching: _VesselBranchingConfig = Field(
+        default_factory=_VesselBranchingConfig
     )
 
     @model_validator(mode="before")
@@ -435,10 +514,12 @@ def parse_app_config(raw_config: object, source_path: Path) -> AppConfig:
     validated = _AppConfig.model_validate(raw_config)
     vessel_widths = validated.vessel_widths.to_config()
     vessel_tortuosities = validated.vessel_tortuosities.to_config()
+    vessel_branching = validated.vessel_branching.to_config()
     circle_colors = validated.overlay.circle_colors
     circles = _derive_overlay_circles(
         vessel_widths,
         vessel_tortuosities,
+        vessel_branching,
         circle_color_overrides=circle_colors,
     )
 
@@ -451,6 +532,7 @@ def parse_app_config(raw_config: object, source_path: Path) -> AppConfig:
         ),
         vessel_widths=vessel_widths,
         vessel_tortuosities=vessel_tortuosities,
+        vessel_branching=vessel_branching,
         source_path=source_path,
     )
 
@@ -458,6 +540,7 @@ def parse_app_config(raw_config: object, source_path: Path) -> AppConfig:
 def _derive_overlay_circles(
     vessel_widths: VesselWidthConfig,
     vessel_tortuosities: VesselTortuosityConfig,
+    vessel_branching: VesselBranchingConfig,
     circle_color_overrides: Mapping[str, tuple[int, int, int]] | None = None,
 ) -> tuple[OverlayCircle, ...]:
     circles_by_name: dict[str, OverlayCircle] = {}
@@ -482,6 +565,16 @@ def _derive_overlay_circles(
             vessel_tortuosities.enabled,
             "vessel_tortuosities.outer_circle",
             vessel_tortuosities.outer_circle,
+        ),
+        (
+            vessel_branching.enabled,
+            "vessel_branching.inner_circle",
+            vessel_branching.inner_circle,
+        ),
+        (
+            vessel_branching.enabled,
+            "vessel_branching.outer_circle",
+            vessel_branching.outer_circle,
         ),
     ):
         if not section_enabled or circle_name is None:
