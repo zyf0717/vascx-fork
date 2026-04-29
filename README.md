@@ -72,6 +72,7 @@ python -m vascx_models run /path/to/image_list.csv /path/to/output              
 python -m vascx_models run /path/to/images /path/to/output --no-preprocess             # skip preprocessing step
 python -m vascx_models run /path/to/images /path/to/output --device cpu                # force CPU inference
 python -m vascx_models run /path/to/images /path/to/output --no-disc --no-quality --no-fovea --no-overlay  # vessels only
+python -m vascx_models extract-pdf-fundus /path/to/pdfs /path/to/images               # extract embedded fundus images from PDFs
 python -m vascx_models vessel-metrics /path/to/existing_output                            # writes output_YYYYMMDD_HHMMSS
 python -m vascx_models vessel-metrics /path/to/existing_output /path/to/new_metrics_output # explicit metrics output path
 ```

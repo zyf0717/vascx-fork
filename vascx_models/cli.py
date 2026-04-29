@@ -29,6 +29,7 @@ from .models.inference import (
     run_segmentation_vessels_and_av,
 )
 from .overlays.utils import batch_create_overlays
+from .pdf_fundus import extract_pdf_directory
 from .runtime import configure_runtime_environment
 
 configure_runtime_environment()
@@ -79,6 +80,48 @@ def _pipeline_dependencies() -> pipeline_ops.PipelineDependencies:
 @click.group(name="vascx")
 def cli():
     configure_logging()
+
+
+@cli.command(name="extract-pdf-fundus")
+@click.argument(
+    "source_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.argument("destination_dir", type=click.Path(path_type=Path))
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Overwrite existing PNG files in DESTINATION_DIR.",
+)
+@click.option(
+    "--crop-margins/--no-crop-margins",
+    default=True,
+    help="Trim bright page margins around extracted fundus images.",
+)
+def extract_pdf_fundus(
+    source_dir: Path,
+    destination_dir: Path,
+    overwrite: bool,
+    crop_margins: bool,
+):
+    """Extract primary fundus images from first-page PDFs into PNG files."""
+    try:
+        written = extract_pdf_directory(
+            source_dir=source_dir,
+            destination_dir=destination_dir,
+            overwrite=overwrite,
+            crop_margins=crop_margins,
+        )
+    except (
+        FileExistsError,
+        FileNotFoundError,
+        NotADirectoryError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Extracted {len(written)} PDF fundus images into {destination_dir}")
 
 
 @cli.command(name="vessel-metrics")

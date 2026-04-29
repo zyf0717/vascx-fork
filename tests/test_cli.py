@@ -84,3 +84,39 @@ def test_cli_vessel_metrics_loads_config_and_invokes_pipeline(
     assert captured["source_output_path"] == source_dir
     assert captured["output_path"] is None
     assert captured["deps"].generate_disc_circles is cli_module.generate_disc_circles
+
+
+def test_cli_extract_pdf_fundus_invokes_extractor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "pdfs"
+    source_dir.mkdir()
+    destination_dir = tmp_path / "images"
+
+    captured: dict[str, object] = {}
+
+    def fake_extract_pdf_directory(**kwargs):
+        captured.update(kwargs)
+        return [destination_dir / "sample.png"]
+
+    monkeypatch.setattr(
+        "vascx_models.cli.extract_pdf_directory", fake_extract_pdf_directory
+    )
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        [
+            "extract-pdf-fundus",
+            str(source_dir),
+            str(destination_dir),
+            "--overwrite",
+            "--no-crop-margins",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["source_dir"] == source_dir
+    assert captured["destination_dir"] == destination_dir
+    assert captured["overwrite"] is True
+    assert captured["crop_margins"] is False
+    assert f"Extracted 1 PDF fundus images into {destination_dir}" in result.output
