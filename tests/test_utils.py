@@ -132,7 +132,7 @@ def test_create_fundus_overlay_draws_tortuosity_skeleton_and_chord(
     assert tuple(output[20, 21]) == (0, 0, 0)
 
 
-def test_create_fundus_overlay_draws_branching_angle_skeleton_and_thin_marker(
+def test_create_fundus_overlay_draws_branching_angle_lines_on_top_and_thin_marker(
     tmp_path: Path,
 ) -> None:
     rgb_path = tmp_path / "rgb.png"
@@ -159,16 +159,26 @@ def test_create_fundus_overlay_draws_branching_angle_skeleton_and_thin_marker(
                 "daughter_2_angle_y": 16.0,
             }
         ],
+        tortuosity_measurements=[
+            {
+                "x_start": 16.0,
+                "y_start": 16.0,
+                "x_end": 20.0,
+                "y_end": 20.0,
+            }
+        ],
         overlay_config=OverlayConfig(
             colors=OverlayColors(
                 vessel=(0, 255, 0),
                 branch_point=(255, 255, 0),
+                branch_angle=(173, 216, 230),
             ),
         ),
     )
 
-    assert tuple(output[16, 16]) == (0, 255, 0)
-    assert tuple(output[16, 24]) == (0, 255, 0)
+    assert tuple(output[16, 16]) == (173, 216, 230)
+    assert tuple(output[16, 24]) == (173, 216, 230)
+    assert tuple(output[20, 20]) == (173, 216, 230)
     assert tuple(output[17, 20]) == (255, 255, 0)
     assert tuple(output[18, 20]) == (0, 0, 0)
 

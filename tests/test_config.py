@@ -246,6 +246,7 @@ def test_load_app_config_accepts_vessel_branching_options(tmp_path: Path) -> Non
                 "overlay:",
                 "  colours:",
                 "    branch_point: '#123456'",
+                "    branch_angle: '#ADD8E6'",
                 "  layers:",
                 "    branching: false",
                 "vessel_branching:",
@@ -270,6 +271,7 @@ def test_load_app_config_accepts_vessel_branching_options(tmp_path: Path) -> Non
 
     assert app_config.overlay.layers.vessel_branching is False
     assert app_config.overlay.colors.branch_point == (18, 52, 86)
+    assert app_config.overlay.colors.branch_angle == (173, 216, 230)
     assert app_config.vessel_branching.inner_circle == "3r"
     assert app_config.vessel_branching.outer_circle == "5r"
     assert app_config.vessel_branching.boundary_tolerance_px == 2.0

@@ -140,15 +140,11 @@ def _rasterize_tortuosity_skeleton_segments(
     return segment_mask
 
 
-def _rasterize_branching_angle_skeleton_segments(
-    vessel_mask: np.ndarray,
+def _draw_branching_angle_lines(
+    draw: ImageDraw.ImageDraw,
     measurements: Sequence[Mapping[str, object]],
-) -> np.ndarray:
-    skeleton_mask = skeletonize(vessel_mask)
-    if not np.any(skeleton_mask):
-        return skeleton_mask
-
-    segment_mask = np.zeros_like(skeleton_mask, dtype=bool)
+    color: tuple[int, int, int],
+) -> None:
     for measurement in measurements:
         if not {
             "x_junction",
@@ -160,24 +156,16 @@ def _rasterize_branching_angle_skeleton_segments(
         }.issubset(measurement):
             continue
 
-        start_yx = _nearest_skeleton_coordinate(
-            skeleton_mask,
-            x_value=float(measurement["x_junction"]),
-            y_value=float(measurement["y_junction"]),
+        start = (
+            float(measurement["x_junction"]),
+            float(measurement["y_junction"]),
         )
-        if start_yx is None:
-            continue
-
         for daughter_index in (1, 2):
-            end_yx = _nearest_skeleton_coordinate(
-                skeleton_mask,
-                x_value=float(measurement[f"daughter_{daughter_index}_angle_x"]),
-                y_value=float(measurement[f"daughter_{daughter_index}_angle_y"]),
+            end = (
+                float(measurement[f"daughter_{daughter_index}_angle_x"]),
+                float(measurement[f"daughter_{daughter_index}_angle_y"]),
             )
-            if end_yx is None:
-                continue
-            segment_mask |= _trace_skeleton_segment(skeleton_mask, start_yx, end_yx)
-    return segment_mask
+            draw.line([start, end], fill=color, width=1)
 
 
 def create_fundus_overlay(
@@ -274,17 +262,6 @@ def create_fundus_overlay(
         )
         output_img[measurement_mask, :] = overlay_config.colors.vessel_width
 
-    if (
-        branching_measurements
-        and overlay_config.layers.vessel_branching
-        and vessel_mask is not None
-    ):
-        angle_skeleton_mask = _rasterize_branching_angle_skeleton_segments(
-            vessel_mask,
-            branching_measurements,
-        )
-        output_img[angle_skeleton_mask, :] = overlay_config.colors.vessel
-
     # Convert to PIL image for drawing the fovea marker
     pil_img = Image.fromarray(output_img)
     draw = ImageDraw.Draw(pil_img)
@@ -337,6 +314,16 @@ def create_fundus_overlay(
             measurements=tortuosity_measurements,
         )
         output_img[tortuosity_mask, :] = overlay_config.colors.vessel
+
+    if branching_measurements and overlay_config.layers.vessel_branching:
+        pil_img = Image.fromarray(output_img)
+        draw = ImageDraw.Draw(pil_img)
+        _draw_branching_angle_lines(
+            draw,
+            branching_measurements,
+            overlay_config.colors.branch_angle,
+        )
+        output_img = np.array(pil_img)
 
     # Save output if path provided
     if output_path:

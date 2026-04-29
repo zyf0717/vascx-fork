@@ -17,6 +17,8 @@ overlay:
     disc: "#FFFFFF" # RGB hex
     fovea: "#FFFF00" # RGB hex
     vessel_widths: "#00FF00" # RGB hex; width markers only
+    branch_point: "#FFFF00" # RGB hex; branching junction marker
+    branch_angle: "#ADD8E6" # RGB hex; straight branching-angle guide lines
   circle_colours: {} # optional mapping, e.g. {"2r": "#00FF00", "5r": "#FF8800"}
 
 #################

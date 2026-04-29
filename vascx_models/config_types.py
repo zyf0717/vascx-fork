@@ -26,6 +26,7 @@ class OverlayColors:
     fovea: tuple[int, int, int] = (255, 255, 0)
     vessel_width: tuple[int, int, int] = (0, 0, 0)
     branch_point: tuple[int, int, int] = (255, 255, 0)
+    branch_angle: tuple[int, int, int] = (173, 216, 230)
 
 
 @dataclass(frozen=True)

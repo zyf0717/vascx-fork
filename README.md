@@ -200,8 +200,8 @@ Overlay directories:
 - `vessel_tortuosity_overlays/`: processed RGB overlaid with a green vessel
   skeleton and the Euclidean endpoint chords for retained tortuosity segments.
 - `vessel_branching_overlays/`: processed RGB overlaid with branch point
-  indicators and the parent/daughter width measurement locations used for the
-  branching CSVs.
+  indicators, parent/daughter width measurement locations, and light-blue
+  straight daughter-angle guide lines drawn above the other overlay layers.
 
 The CRAE/CRVE values are pixel-space equivalents unless you apply an external
 pixel-to-length calibration.

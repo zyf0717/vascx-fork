@@ -93,6 +93,8 @@ class _OverlayColors(_ConfigModel):
         "vessel_widths": "vessel_width",
         "branch_point": "branch_point",
         "branch_points": "branch_point",
+        "branch_angle": "branch_angle",
+        "branch_angles": "branch_angle",
     }
 
     artery: tuple[int, int, int] = (255, 0, 0)
@@ -102,6 +104,7 @@ class _OverlayColors(_ConfigModel):
     fovea: tuple[int, int, int] = (255, 255, 0)
     vessel_width: tuple[int, int, int] = (0, 0, 0)
     branch_point: tuple[int, int, int] = (255, 255, 0)
+    branch_angle: tuple[int, int, int] = (173, 216, 230)
 
     @model_validator(mode="before")
     @classmethod
@@ -122,6 +125,7 @@ class _OverlayColors(_ConfigModel):
         "fovea",
         "vessel_width",
         "branch_point",
+        "branch_angle",
         mode="before",
     )
     @classmethod
@@ -137,6 +141,7 @@ class _OverlayColors(_ConfigModel):
             fovea=self.fovea,
             vessel_width=self.vessel_width,
             branch_point=self.branch_point,
+            branch_angle=self.branch_angle,
         )
 
 
