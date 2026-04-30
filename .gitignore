@@ -62,3 +62,6 @@ output_*.zip
 
 # Agent files
 AGENTS.md
+
+# .env
+.env

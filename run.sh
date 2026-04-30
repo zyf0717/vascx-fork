@@ -2,6 +2,24 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CONDA_ENV_FROM_ENV="${CONDA_ENV-}"
+INPUT_PATH_FROM_ENV="${INPUT_PATH-}"
+OUTPUT_PATH_FROM_ENV="${OUTPUT_PATH-}"
+N_JOBS_FROM_ENV="${N_JOBS-}"
+DEVICE_FROM_ENV="${DEVICE-}"
+
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+fi
+
+[[ -n "$CONDA_ENV_FROM_ENV" ]] && CONDA_ENV="$CONDA_ENV_FROM_ENV"
+[[ -n "$INPUT_PATH_FROM_ENV" ]] && INPUT_PATH="$INPUT_PATH_FROM_ENV"
+[[ -n "$OUTPUT_PATH_FROM_ENV" ]] && OUTPUT_PATH="$OUTPUT_PATH_FROM_ENV"
+[[ -n "$N_JOBS_FROM_ENV" ]] && N_JOBS="$N_JOBS_FROM_ENV"
+[[ -n "$DEVICE_FROM_ENV" ]] && DEVICE="$DEVICE_FROM_ENV"
+
 CONDA_ENV="${CONDA_ENV:-vascx-fork}"
 SAMPLE_INPUT_PATH="$REPO_ROOT/samples/fundus/original"
 DEFAULT_INPUT_PATH="images"
