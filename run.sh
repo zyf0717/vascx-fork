@@ -52,18 +52,30 @@ if [[ ! -d "$INPUT_PATH" ]]; then
   exit 1
 fi
 
+RUN_MODE="full"
+if [[ -d "$INPUT_PATH/vessels" && -d "$INPUT_PATH/artery_vein" && -f "$INPUT_PATH/disc_geometry.csv" ]]; then
+  RUN_MODE="vessel-metrics"
+fi
+
 mkdir -p "$OUTPUT_PATH"
 
 echo "Running VascX Fork"
+echo "  mode:        $RUN_MODE"
 echo "  conda env:   $CONDA_ENV"
 echo "  input path:  $INPUT_PATH"
 echo "  output path: $OUTPUT_PATH"
-echo "  n_jobs:      $N_JOBS"
-echo "  device:      $DEVICE"
+if [[ "$RUN_MODE" == "full" ]]; then
+  echo "  n_jobs:      $N_JOBS"
+  echo "  device:      $DEVICE"
+fi
 
 CONDA_BASE="$(conda info --base)"
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 cd "$REPO_ROOT"
+if [[ "$RUN_MODE" == "vessel-metrics" ]]; then
+  exec python -m vascx_models vessel-metrics "$INPUT_PATH" "$OUTPUT_PATH"
+fi
+
 exec python -m vascx_models run "$INPUT_PATH" "$OUTPUT_PATH" --n_jobs "$N_JOBS" --device "$DEVICE"

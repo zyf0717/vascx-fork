@@ -966,6 +966,59 @@ def test_run_pipeline_reports_missing_path_column_in_csv(
     assert "CSV must contain a 'path' column" in caplog.text
 
 
+def test_run_pipeline_rejects_directory_without_supported_images(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "vessels").mkdir()
+    (input_dir / "notes.txt").write_text("not an image", encoding="utf-8")
+    app_config = _load_app_config(tmp_path, ["overlay:", "  enabled: false"])
+
+    with pytest.raises(click.ClickException, match="No supported image files"):
+        pipeline_ops.run_pipeline(
+            data_path=input_dir,
+            output_path=output_dir,
+            app_config=app_config,
+            deps=_build_dependencies(),
+            preprocess=True,
+            vessels=True,
+            disc=True,
+            quality=True,
+            fovea=True,
+            overlay=False,
+            device_name="auto",
+            n_jobs=4,
+        )
+
+
+def test_run_pipeline_rejects_empty_preprocessing_output(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (32, 32), color=(0, 0, 0)).save(input_dir / "sample.png")
+    app_config = _load_app_config(tmp_path, ["overlay:", "  enabled: false"])
+
+    with pytest.raises(click.ClickException, match="Preprocessing produced no PNG"):
+        pipeline_ops.run_pipeline(
+            data_path=input_dir,
+            output_path=output_dir,
+            app_config=app_config,
+            deps=_build_dependencies(run_preprocessing=lambda **kwargs: None),
+            preprocess=True,
+            vessels=True,
+            disc=True,
+            quality=True,
+            fovea=True,
+            overlay=False,
+            device_name="auto",
+            n_jobs=4,
+        )
+
+
 def test_run_pipeline_accepts_explicit_device_and_logs_selection(
     tmp_path: Path, caplog
 ) -> None:

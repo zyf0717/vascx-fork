@@ -9,6 +9,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
 VESSEL_METRIC_INTERMEDIATE_DIRS = ("vessels", "artery_vein")
 VESSEL_METRIC_INTERMEDIATE_FILES = ("disc_geometry.csv",)
 VESSEL_METRIC_OPTIONAL_BASE_DIRS = ("disc", "preprocessed_rgb")
@@ -748,12 +749,17 @@ def run_pipeline(
             return
     else:
         logger.info("Finding files in directory: %s", data_path)
-        files = list(data_path.glob("*"))
+        files = [
+            file_path
+            for file_path in data_path.glob("*")
+            if file_path.is_file() and file_path.suffix.lower() in IMAGE_EXTENSIONS
+        ]
         ids = [file_path.stem for file_path in files]
 
     if not files:
-        logger.warning("No files found to process")
-        return
+        raise click.ClickException(
+            f"No supported image files found to process in {data_path}"
+        )
 
     logger.info("Found %d files to process", len(files))
 
@@ -771,6 +777,10 @@ def run_pipeline(
         preprocessed_files = files
     ids = [file_path.stem for file_path in preprocessed_files]
     logger.info("Prepared %d images for inference", len(preprocessed_files))
+    if not preprocessed_files:
+        raise click.ClickException(
+            f"Preprocessing produced no PNG images in {preprocess_rgb_path}"
+        )
 
     available_devices = deps.available_device_types()
     logger.info(
