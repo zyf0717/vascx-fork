@@ -37,6 +37,7 @@ VESSEL_TORTUOSITY_SUMMARY_COLUMNS = [
     "inner_circle_radius_px",
     "outer_circle_radius_px",
     "n_segments",
+    "n_start_points",
     "total_length_px",
     "mean_tortuosity_weighted",
 ]
@@ -121,6 +122,7 @@ def summarize_vessel_tortuosities(
             outer_radius_px,
         ) = group_key
         total_length_px = float(valid["path_length_px"].sum())
+        n_start_points = int(valid[["x_start", "y_start"]].drop_duplicates().shape[0])
         weighted_tortuosity = float("nan")
         if total_length_px > 0.0:
             weighted_tortuosity = float(
@@ -136,6 +138,7 @@ def summarize_vessel_tortuosities(
                 "inner_circle_radius_px": float(inner_radius_px),
                 "outer_circle_radius_px": float(outer_radius_px),
                 "n_segments": int(len(valid)),
+                "n_start_points": n_start_points,
                 "total_length_px": total_length_px,
                 "mean_tortuosity_weighted": weighted_tortuosity,
             }

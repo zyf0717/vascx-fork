@@ -205,6 +205,7 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
                     "inner_circle_radius_px": 10.0,
                     "outer_circle_radius_px": 25.0,
                     "n_segments": 1,
+                    "n_start_points": 1,
                     "total_length_px": 5.0,
                     "mean_tortuosity_weighted": 1.0,
                 }
@@ -412,11 +413,11 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
     assert overlay_calls[3]["branching_width_data"].iloc[0]["width_px"] == 7.0
     assert overlay_calls[3]["overlay_config"].layers.vessel_branching is True
 
-    vessel_equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
+    vessel_widths_summary = pd.read_csv(output_dir / "vessel_widths_summary.csv")
     vessel_tortuosity_summary = pd.read_csv(
         output_dir / "vessel_tortuosity_summary.csv"
     )
-    assert vessel_equivalents.columns.tolist() == [
+    assert vessel_widths_summary.columns.tolist() == [
         "image_id",
         "metric",
         "vessel_type",
@@ -427,9 +428,9 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
         "mean_widths_used_px",
         "equivalent_px",
     ]
-    assert vessel_equivalents.iloc[0]["metric"] == "CRAE"
-    assert vessel_equivalents.iloc[0]["vessel_ids_used"] == "artery_1"
-    assert vessel_equivalents.iloc[0]["n_vessels_used"] == 1
+    assert vessel_widths_summary.iloc[0]["metric"] == "CRAE"
+    assert vessel_widths_summary.iloc[0]["vessel_ids_used"] == "artery_1"
+    assert vessel_widths_summary.iloc[0]["n_vessels_used"] == 1
     assert vessel_tortuosity_summary.columns.tolist() == [
         "image_id",
         "metric",
@@ -439,6 +440,7 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
         "inner_circle_radius_px",
         "outer_circle_radius_px",
         "n_segments",
+        "n_start_points",
         "total_length_px",
         "mean_tortuosity_weighted",
     ]
@@ -597,6 +599,7 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
                     "inner_circle_radius_px": 10.0,
                     "outer_circle_radius_px": 15.0,
                     "n_segments": 2,
+                    "n_start_points": 2,
                     "total_length_px": 12.2,
                     "mean_tortuosity_weighted": 1.118,
                 }
@@ -770,9 +773,9 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
     assert (output_dir / "vessel_branching_widths.csv").exists()
     assert (output_dir / "vessel_tortuosity_overlays").exists()
     assert (output_dir / "vessel_branching_overlays").exists()
-    equivalents = pd.read_csv(output_dir / "vessel_equivalents.csv")
-    assert equivalents.iloc[0]["metric"] == "CRAE"
-    assert "mean_tortuosity_used" not in equivalents.columns
+    widths_summary = pd.read_csv(output_dir / "vessel_widths_summary.csv")
+    assert widths_summary.iloc[0]["metric"] == "CRAE"
+    assert "mean_tortuosity_used" not in widths_summary.columns
 
 
 def test_run_pipeline_skips_disabled_metric_sections(tmp_path: Path) -> None:

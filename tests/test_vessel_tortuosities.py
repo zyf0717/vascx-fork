@@ -244,7 +244,7 @@ def test_summarize_vessel_tortuosities_uses_path_length_weighting() -> None:
                 "inner_circle_radius_px": 40.0,
                 "outer_circle_radius_px": 60.0,
                 "connection_index": 2,
-                "x_start": 1.0,
+                "x_start": 0.0,
                 "y_start": 0.0,
                 "x_end": 2.0,
                 "y_end": 0.0,
@@ -267,10 +267,12 @@ def test_summarize_vessel_tortuosities_uses_path_length_weighting() -> None:
         "inner_circle_radius_px",
         "outer_circle_radius_px",
         "n_segments",
+        "n_start_points",
         "total_length_px",
         "mean_tortuosity_weighted",
     ]
     assert df_summary.iloc[0]["metric"] == "TORTA"
     assert df_summary.iloc[0]["n_segments"] == 2
+    assert df_summary.iloc[0]["n_start_points"] == 1
     assert df_summary.iloc[0]["total_length_px"] == pytest.approx(40.0)
     assert df_summary.iloc[0]["mean_tortuosity_weighted"] == pytest.approx(1.4)

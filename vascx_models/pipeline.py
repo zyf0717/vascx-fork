@@ -101,6 +101,7 @@ def remove_metric_outputs(
     if not width_enabled:
         width_paths = (
             output_path / "vessel_widths.csv",
+            output_path / "vessel_widths_summary.csv",
             output_path / "vessel_equivalents.csv",
             output_path / "vessel_width_overlays",
         )
@@ -482,7 +483,7 @@ def compute_and_save_vessel_metrics(
     vessel_widths_path = output_path / "vessel_widths.csv"
     vessel_tortuosities_path = output_path / "vessel_tortuosities.csv"
     vessel_tortuosity_summary_path = output_path / "vessel_tortuosity_summary.csv"
-    vessel_equivalents_path = output_path / "vessel_equivalents.csv"
+    vessel_widths_summary_path = output_path / "vessel_widths_summary.csv"
     vessel_branching_path = output_path / "vessel_branching.csv"
     vessel_branching_widths_path = output_path / "vessel_branching_widths.csv"
 
@@ -521,8 +522,11 @@ def compute_and_save_vessel_metrics(
             df_connection_widths, df_vessel_equivalents = (
                 deps.compute_revised_crx_from_widths(df_vessel_widths)
             )
-            df_vessel_equivalents.to_csv(vessel_equivalents_path, index=False)
-            logger.info("Vessel equivalents saved to %s", vessel_equivalents_path)
+            legacy_equivalents_path = output_path / "vessel_equivalents.csv"
+            if legacy_equivalents_path.exists():
+                legacy_equivalents_path.unlink()
+            df_vessel_equivalents.to_csv(vessel_widths_summary_path, index=False)
+            logger.info("Vessel widths summary saved to %s", vessel_widths_summary_path)
         else:
             logger.info(
                 "Skipping vessel width metrics because vessel_widths.enabled is false"

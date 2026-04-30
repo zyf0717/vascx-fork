@@ -26,7 +26,7 @@ overlay:
 #################
 
 vessel_widths:
-  enabled: true # true|false; compute vessel_widths.csv, vessel_equivalents.csv, and vessel_width_overlays/
+  enabled: true # true|false; compute vessel_widths.csv, vessel_widths_summary.csv, and vessel_width_overlays/
   inner_circle: "2r" # e.g. "2r" = 2x disc radius
   outer_circle: "3r" # must be larger than inner_circle; circles are auto-derived from these names
   samples_per_connection: 5 # positive integer = evenly spaced samples per vessel; -1 = every interior path pixel

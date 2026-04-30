@@ -147,7 +147,7 @@ OUTPUT_PATH/
 ├── vessel_tortuosity_summary.csv
 ├── vessel_branching.csv
 ├── vessel_branching_widths.csv
-├── vessel_equivalents.csv
+├── vessel_widths_summary.csv
 ├── quality.csv
 └── fovea.csv
 ```
@@ -164,15 +164,16 @@ Key CSV outputs:
 - `vessel_tortuosities.csv`: per-segment tortuosity records, computed as skeleton
   path length divided by endpoint chord length for each retained tortuosity segment.
 - `vessel_tortuosity_summary.csv`: per-image, per-vessel-type tortuosity summary,
-  including the number of retained segments, total retained path length, and a
-  length-weighted mean tortuosity (`TORTA` for arteries, `TORTV` for veins).
+  including the number of retained segments, number of unique segment start
+  points, total retained path length, and a length-weighted mean tortuosity
+  (`TORTA` for arteries, `TORTV` for veins).
 - `vessel_branching.csv`: per-bifurcation branching records, including junction
   coordinates, parent/daughter widths, daughter branching angle, branching
   coefficient, daughter angle-sample endpoints, and branch path lengths.
 - `vessel_branching_widths.csv`: per-sample audit records for the width
   measurements used by `vessel_branching.csv`, including width endpoints and
   measurement validity/failure fields.
-- `vessel_equivalents.csv`: CRAE/CRVE summary per image and vessel type.
+- `vessel_widths_summary.csv`: CRAE/CRVE summary per image and vessel type.
 
 Additional `vessel_widths.csv` columns include:
 
@@ -180,7 +181,7 @@ Additional `vessel_widths.csv` columns include:
 - `profile_trough_value`, `profile_background_value`, `profile_contrast`
 - `profile_threshold`, `profile_confidence`
 
-`vessel_equivalents.csv` includes:
+`vessel_widths_summary.csv` includes:
 
 - `metric`: `CRAE` for arteries or `CRVE` for veins.
 - `requested_n_largest`: number of vessels requested for the equivalent formula,
@@ -219,7 +220,7 @@ from an existing pipeline output. The source directory must contain:
 The full source output directory is copied into the requested new output
 directory, then `vessel_widths.csv`, `vessel_tortuosities.csv`,
 `vessel_tortuosity_summary.csv`, `vessel_branching.csv`,
-`vessel_branching_widths.csv`, `vessel_equivalents.csv`, and the overlay
+`vessel_branching_widths.csv`, `vessel_widths_summary.csv`, and the overlay
 directories are refreshed there. When no destination is provided,
 `vessel-metrics` creates a standard `output_YYYYMMDD_HHMMSS` folder in the
 current working directory. The destination must be new or empty, and it cannot
