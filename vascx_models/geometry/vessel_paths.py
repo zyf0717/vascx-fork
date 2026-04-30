@@ -586,6 +586,32 @@ def _trace_downstream_branch(
     return np.asarray(path, dtype=float)
 
 
+def _subtree_contains_any_node(
+    node: tuple[int, int],
+    child_by_node: dict[tuple[int, int], list[tuple[int, int]]],
+    target_nodes: set[tuple[int, int]],
+) -> bool:
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current in target_nodes:
+            return True
+        stack.extend(child_by_node[current])
+    return False
+
+
+def _outer_reaching_children(
+    node: tuple[int, int],
+    child_by_node: dict[tuple[int, int], list[tuple[int, int]]],
+    outer_nodes: set[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    return [
+        child
+        for child in child_by_node[node]
+        if _subtree_contains_any_node(child, child_by_node, outer_nodes)
+    ]
+
+
 def trace_vessel_branching_points_between_disc_circle_pair(
     vessel_mask: np.ndarray,
     disc_center_xy: np.ndarray,
@@ -653,7 +679,11 @@ def trace_vessel_branching_points_between_disc_circle_pair(
             for node in sorted(key_nodes):
                 if node in boundary_roles or parent_by_node[node] is None:
                     continue
-                children = child_by_node[node]
+                children = _outer_reaching_children(
+                    node,
+                    child_by_node=child_by_node,
+                    outer_nodes=group_outer_nodes,
+                )
                 if len(children) != 2:
                     continue
 

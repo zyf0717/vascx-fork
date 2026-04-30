@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from vascx_models.geometry.vessel_paths import (
+    _outer_reaching_children,
     interpolate_path_point,
     path_cumulative_lengths,
     trace_vessel_paths_between_disc_circle_pair,
@@ -39,6 +40,29 @@ def test_path_cumulative_lengths_and_interpolation() -> None:
     assert interpolate_path_point(path_xy, lengths, 99.0).tolist() == pytest.approx(
         [6.0, 4.0]
     )
+
+
+def test_outer_reaching_children_filters_non_outer_subtrees() -> None:
+    node = (0, 0)
+    outer_a = (2, 0)
+    outer_b = (0, 2)
+    child_by_node = {
+        node: [(1, 0), (0, 1), (1, 1)],
+        (1, 0): [outer_a],
+        outer_a: [],
+        (0, 1): [outer_b],
+        outer_b: [],
+        (1, 1): [(2, 2)],
+        (2, 2): [],
+    }
+
+    children = _outer_reaching_children(
+        node,
+        child_by_node=child_by_node,
+        outer_nodes={outer_a, outer_b},
+    )
+
+    assert children == [(1, 0), (0, 1)]
 
 
 def test_trace_vessel_paths_between_disc_circle_pair_orders_inner_to_outer() -> None:
