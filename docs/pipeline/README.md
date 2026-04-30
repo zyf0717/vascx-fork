@@ -137,19 +137,19 @@ $$
 Tortuosity is defined as path length divided by chord length:
 
 $$
-\operatorname{tortuosity} = \frac{L_{path}}{L_{chord}}
+T = \frac{L_{path}}{L_{chord}}
 $$
 
 with
 
 $$
-L_{path} = \sum_{i=1}^{n-1} \left\| p_{i+1} - p_i \right\|_2
+L_{path} = \sum_{i=1}^{n-1} \| p_{i+1} - p_i \|_2
 $$
 
 and
 
 $$
-L_{chord} = \left\| p_n - p_1 \right\|_2
+L_{chord} = \| p_n - p_1 \|_2
 $$
 
 ### Length-weighted tortuosity summary
@@ -157,10 +157,10 @@ $$
 The summary tortuosity per image and vessel type is length-weighted:
 
 $$
-\overline{T}_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
+T_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
 $$
 
-where $T_i$ is the segment tortuosity and $L_i$ is the segment path length.
+where $T$ denotes tortuosity, $T_i$ is the segment tortuosity, and $L_i$ is the segment path length.
 
 ### Branching coefficient
 
@@ -177,7 +177,7 @@ where $w_p$ is the parent width and $w_{d1}, w_{d2}$ are the daughter widths.
 The daughter-branch angle is the angle between the two daughter direction vectors:
 
 $$
-angle = \cos^{-1} \left( \frac{v_1 \cdot v_2}{\left\|v_1\right\| \left\|v_2\right\|} \right)
+angle = \cos^{-1}(\frac{v_1 \cdot v_2}{\|v_1\| \|v_2\|})
 $$
 
 ### Revised vessel equivalent recursion
@@ -336,7 +336,7 @@ Processing logic:
 Formula:
 
 $$
-r_{disc} = \sqrt{\frac{A_{disc}}{\pi}}, \qquad r_{circle} = r_{disc} \cdot d_{circle}
+r_{disc} = \sqrt{\frac{A_{disc}}{\pi}}, \; r_{circle} = r_{disc} \cdot d_{circle}
 $$
 
 Why this matters:
@@ -522,14 +522,14 @@ For each retained path segment:
 Formula:
 
 $$
-\operatorname{tortuosity} = \frac{L_{path}}{L_{chord}}
+T = \frac{L_{path}}{L_{chord}}
 $$
 
 where
 
 $$
-L_{path} = \sum_{i=1}^{n-1} \left\| p_{i+1} - p_i \right\|_2, \qquad
-L_{chord} = \left\| p_n - p_1 \right\|_2
+L_{path} = \sum_{i=1}^{n-1} \| p_{i+1} - p_i \|_2,
+L_{chord} = \| p_n - p_1 \|_2
 $$
 
 ### 13.3 Summarizing tortuosity
@@ -548,7 +548,7 @@ Processing logic:
 Formula:
 
 $$
-\overline{T}_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
+T_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
 $$
 
 This summary is written to `vessel_tortuosity_summary.csv`.
@@ -608,7 +608,7 @@ $$
 and
 
 $$
-angle = \cos^{-1} \left( \frac{v_1 \cdot v_2}{\left\|v_1\right\| \left\|v_2\right\|} \right)
+angle = \cos^{-1}(\frac{v_1 \cdot v_2}{\|v_1\| \|v_2\|})
 $$
 
 The stage writes:
