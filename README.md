@@ -66,7 +66,8 @@ Use any one of the following commands:
 
 ```bash
 ./run.sh --sample-run                                                                    # run on bundled sample images
-INPUT_PATH=/path/to/images OUTPUT_PATH=/path/to/output N_JOBS=4 ./run.sh               # custom paths and parallelism
+INPUT_PATH=/path/to/images OUTPUT_PARENT_DIR=/path/to/results N_JOBS=4 ./run.sh        # timestamped output under a custom parent
+INPUT_PATH=/path/to/images OUTPUT_PATH=/path/to/output ./run.sh                       # exact output path override
 python -m vascx_models run /path/to/images /path/to/output                             # image directory input
 python -m vascx_models run /path/to/image_list.csv /path/to/output                     # CSV with 'path' column
 python -m vascx_models run /path/to/images /path/to/output --no-preprocess             # skip preprocessing step
