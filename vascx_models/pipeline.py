@@ -561,6 +561,7 @@ def compute_and_save_vessel_metrics(
             df_vessel_tortuosity_summary = deps.summarize_vessel_tortuosities(
                 df_vessel_tortuosities,
                 output_path=vessel_tortuosity_summary_path,
+                method=app_config.vessel_tortuosities.method,
             )
             logger.info(
                 "Vessel tortuosity summary saved to %s",

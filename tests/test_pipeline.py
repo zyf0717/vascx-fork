@@ -64,7 +64,7 @@ def _build_dependencies(**overrides) -> pipeline_ops.PipelineDependencies:
         measure_vessel_widths_between_disc_circle_pair=lambda **kwargs: pd.DataFrame(),
         compute_revised_crx_from_widths=lambda _df: (pd.DataFrame(), pd.DataFrame()),
         measure_vessel_tortuosities_between_disc_circle_pair=lambda **kwargs: pd.DataFrame(),
-        summarize_vessel_tortuosities=lambda df, output_path=None: df,
+        summarize_vessel_tortuosities=lambda df, output_path=None, method="simple": df,
         measure_vessel_branching_between_disc_circle_pair=lambda **kwargs: (
             pd.DataFrame(),
             pd.DataFrame(),
@@ -194,7 +194,9 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
         df_tortuosities.to_csv(kwargs["output_path"], index=False)
         return df_tortuosities
 
-    def fake_summarize_vessel_tortuosities(df_tortuosities, output_path=None):
+    def fake_summarize_vessel_tortuosities(
+        df_tortuosities, output_path=None, method="simple"
+    ):
         summary = pd.DataFrame(
             [
                 {
@@ -209,6 +211,9 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
                     "n_start_points": 1,
                     "total_length_px": 5.0,
                     "mean_tortuosity_weighted": 1.0,
+                    "mean_curvature_radius_px": 1.0
+                    if method == "curvature"
+                    else float("nan"),
                 }
             ]
         )
@@ -446,6 +451,7 @@ def test_run_pipeline_passes_measurement_config_and_data_to_overlays(
         "n_start_points",
         "total_length_px",
         "mean_tortuosity_weighted",
+        "mean_curvature_radius_px",
     ]
     assert vessel_tortuosity_summary.iloc[0]["metric"] == "TORTA"
 
@@ -597,7 +603,9 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
         df_tortuosities.to_csv(kwargs["output_path"], index=False)
         return df_tortuosities
 
-    def fake_summarize_vessel_tortuosities(df_tortuosities, output_path=None):
+    def fake_summarize_vessel_tortuosities(
+        df_tortuosities, output_path=None, method="simple"
+    ):
         summary = pd.DataFrame(
             [
                 {
@@ -612,6 +620,9 @@ def test_run_vessel_metrics_pipeline_copies_source_output_and_writes_outputs(
                     "n_start_points": 2,
                     "total_length_px": 12.2,
                     "mean_tortuosity_weighted": 1.118,
+                    "mean_curvature_radius_px": 1.0 / (1.118**0.5)
+                    if method == "curvature"
+                    else float("nan"),
                 }
             ]
         )
@@ -876,7 +887,9 @@ def test_run_vessel_metrics_pipeline_uses_timestamped_output_when_omitted(
         pd.DataFrame(columns=["image_id"]).to_csv(kwargs["output_path"], index=False)
         return pd.DataFrame(columns=["image_id"])
 
-    def fake_summarize_vessel_tortuosities(_df_tortuosities, output_path=None):
+    def fake_summarize_vessel_tortuosities(
+        _df_tortuosities, output_path=None, method="simple"
+    ):
         summary = pd.DataFrame(columns=["image_id"])
         if output_path is not None:
             summary.to_csv(output_path, index=False)

@@ -41,6 +41,7 @@ VESSEL_TORTUOSITY_SUMMARY_COLUMNS = [
     "n_start_points",
     "total_length_px",
     "mean_tortuosity_weighted",
+    "mean_curvature_radius_px",
 ]
 
 TortuosityMethod = Literal["simple", "curvature"]
@@ -159,6 +160,7 @@ def vessel_tortuosity_record(
 def summarize_vessel_tortuosities(
     df_tortuosities: pd.DataFrame,
     output_path: Optional[Path] = None,
+    method: TortuosityMethod = "simple",
 ) -> pd.DataFrame:
     """Aggregate per-segment tortuosities into length-weighted summaries."""
     if df_tortuosities.empty:
@@ -197,6 +199,9 @@ def summarize_vessel_tortuosities(
             weighted_tortuosity = float(
                 np.average(valid["tortuosity"], weights=valid["path_length_px"])
             )
+        mean_curvature_radius_px = float("nan")
+        if method == "curvature" and weighted_tortuosity > 0.0:
+            mean_curvature_radius_px = float(1.0 / np.sqrt(weighted_tortuosity))
         summary_records.append(
             {
                 "image_id": image_id,
@@ -210,6 +215,7 @@ def summarize_vessel_tortuosities(
                 "n_start_points": n_start_points,
                 "total_length_px": total_length_px,
                 "mean_tortuosity_weighted": weighted_tortuosity,
+                "mean_curvature_radius_px": mean_curvature_radius_px,
             }
         )
 

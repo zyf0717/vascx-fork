@@ -549,6 +549,8 @@ Processing logic:
 3. Count unique starting points.
 4. Sum retained path length.
 5. Compute a length-weighted mean tortuosity.
+6. In `curvature` mode, compute `mean_curvature_radius_px` as
+   `1 / sqrt(mean_tortuosity_weighted)`.
 6. Emit `TORTA` for arteries and `TORTV` for veins.
 
 Formula:

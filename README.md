@@ -175,7 +175,9 @@ Key CSV outputs:
 - `vessel_tortuosity_summary.csv`: per-image, per-vessel-type tortuosity summary,
   including the number of retained segments, number of unique segment start
   points, total retained path length, and a length-weighted mean tortuosity
-  (`TORTA` for arteries, `TORTV` for veins).
+  (`TORTA` for arteries, `TORTV` for veins). In `curvature` mode, the summary
+  also includes `mean_curvature_radius_px`, computed as
+  `1 / sqrt(mean_tortuosity_weighted)`.
 - `vessel_branching.csv`: per-bifurcation branching records, including junction
   coordinates, parent/daughter widths, daughter branching angle, branching
   coefficient, daughter angle-sample endpoints, and branch path lengths.
