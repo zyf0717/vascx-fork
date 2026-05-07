@@ -160,7 +160,7 @@ $$
 T_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
 $$
 
-where $T$ denotes tortuosity, $T_i$ is the segment tortuosity, and $L_i$ is the segment path length.
+where $T$ denotes tortuosity, $T_i$ is the segment tortuosity, and $L_i$ is the segment path length. In `simple` mode this quantity is dimensionless. In `curvature` mode it has units of $\mathrm{px}^{-2}$.
 
 ### Branching coefficient
 
@@ -525,7 +525,9 @@ $$
 T = \frac{L_{path}}{L_{chord}}
 $$
 
-The `curvature` method uses B-spline mean squared curvature along arc length:
+The `curvature` method removes consecutive duplicate points, fits an
+interpolating B-spline to the ordered 2D centerline, and uses mean squared
+curvature along arc length:
 
 $$
 T = \frac{\int \kappa(s)^2\,ds}{L_{path}}
@@ -537,6 +539,18 @@ $$
 L_{path} = \sum_{i=1}^{n-1} \| p_{i+1} - p_i \|_2,
 L_{chord} = \| p_n - p_1 \|_2
 $$
+
+and the spline curvature is
+
+$$
+\kappa(u) = \frac{|x'(u)y''(u) - y'(u)x''(u)|}{(x'(u)^2 + y'(u)^2)^{3/2}}
+$$
+
+with the implementation evaluating first and second spline derivatives on a
+dense uniform parameter grid. If fewer than three distinct points remain after
+deduplication, or the fitted path is effectively straight/degenerate, the
+curvature tortuosity is reported as `0.0`. This metric has units of
+$\mathrm{px}^{-2}$.
 
 ### 13.3 Summarizing tortuosity
 
@@ -551,13 +565,17 @@ Processing logic:
 5. Compute a length-weighted mean tortuosity.
 6. In `curvature` mode, compute `mean_curvature_radius_px` as
    `1 / sqrt(mean_tortuosity_weighted)`.
-6. Emit `TORTA` for arteries and `TORTV` for veins.
+7. Emit `TORTA` for arteries and `TORTV` for veins.
 
 Formula:
 
 $$
 T_{weighted} = \frac{\sum_i T_i L_i}{\sum_i L_i}
 $$
+
+In `curvature` mode, `mean_curvature_radius_px` is therefore an
+RMS-equivalent curvature radius derived from the weighted mean squared
+curvature, not an arithmetic mean of local curvature radii.
 
 This summary is written to `vessel_tortuosity_summary.csv`.
 

@@ -125,8 +125,10 @@ Tortuosity measurement is handled separately and uses a different correspondence
 
 `vessel_tortuosities.method` selects the calculation used for each retained
 segment. `simple` keeps the existing path-length divided by chord-length
-calculation. `curvature` computes B-spline mean squared curvature along arc
-length.
+calculation. `curvature` first removes consecutive duplicate path points, then
+fits an interpolating B-spline to the ordered centerline and reports mean
+squared curvature along arc length. Straight or otherwise degenerate paths
+return `0.0`. Unlike `simple`, this curvature metric has units of `px^-2`.
 
 Branching measurement is also handled separately:
 
@@ -172,12 +174,15 @@ Key CSV outputs:
   `mask_width_px`, `measurement_valid`, and `measurement_failure_reason`.
 - `vessel_tortuosities.csv`: per-segment tortuosity records, computed with the
   configured `vessel_tortuosities.method` for each retained tortuosity segment.
+  In `curvature` mode, the `tortuosity` column stores mean squared curvature in
+  `px^-2` rather than a dimensionless path/chord ratio.
 - `vessel_tortuosity_summary.csv`: per-image, per-vessel-type tortuosity summary,
   including the number of retained segments, number of unique segment start
   points, total retained path length, and a length-weighted mean tortuosity
   (`TORTA` for arteries, `TORTV` for veins). In `curvature` mode, the summary
   also includes `mean_curvature_radius_px`, computed as
-  `1 / sqrt(mean_tortuosity_weighted)`.
+  `1 / sqrt(mean_tortuosity_weighted)`. This is an RMS-equivalent curvature
+  radius in pixels, not an arithmetic mean of local radii.
 - `vessel_branching.csv`: per-bifurcation branching records, including junction
   coordinates, parent/daughter widths, daughter branching angle, branching
   coefficient, daughter angle-sample endpoints, and branch path lengths.
